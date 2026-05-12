@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: syngate-postgres
+    environment:
+      POSTGRES_USER: docker
+      POSTGRES_PASSWORD: dockerpassword
+      POSTGRES_DB: syngate_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - syngate-pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: syngate-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - syngate-redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  syngate-pg-data:
+  syngate-redis-data:
