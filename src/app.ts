@@ -1,10 +1,11 @@
+import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import pino from 'pino-http';
 import swaggerUi from 'swagger-ui-express';
 import { openapiSpecification } from './config/swagger';
-import { renderScalar } from './config/scalar-config'; // Importamos a nossa função
+import { renderScalar } from './config/scalar-config'; 
 
 const app = express();
 
