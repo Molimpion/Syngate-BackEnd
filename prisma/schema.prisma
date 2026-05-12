@@ -1,0 +1,18 @@
+// Isso já deve estar no seu arquivo
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Adicione este modelo:
+model AccessLog {
+  id        String   @id @default(uuid())
+  device    String
+  auth      Boolean
+  createdAt DateTime @default(now())
+
+  @@map("access_logs")
+}
