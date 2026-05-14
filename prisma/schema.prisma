@@ -1,3 +1,15 @@
+// schema.prisma
+//   - hashSenha (guarda o hash bcrypt/argon2, nunca a senha em texto limpo)
+//   - hashChaveSeguranca (guarda o hash da chave IoT, não o segredo puro)
+//   - diasSemana como Int[] (Array nativo do PostgreSQL, facilita filtros)
+//   - horaInicio / horaFim como Int (minutos desde a meia-noite, ex: 480 = 08:00)
+//   - LogAcesso.usuarioId agora é opcional (permite registrar cartões desconhecidos/visitantes)
+//   - Campo uidCartao no LogAcesso para capturar o UID bruto do RFID
+//   - onDelete: SetNull em vez de Cascade (preserva a trilha de auditoria se o usuário for deletado)
+//   - Sala @@unique([nome, bloco]) para evitar duplicidade
+//   - Índices (@@index) no LogAcesso para buscas super rápidas por data, usuário e dispositivo
+//   - Tabela de Token separada do Usuario para gerenciar múltiplos tipos de tokens
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -6,11 +18,172 @@ datasource db {
   provider = "postgresql"
 }
 
-model AccessLog {
-  id        String   @id @default(uuid())
-  device    String
-  auth      Boolean
-  createdAt DateTime @default(now())
+// ─── Enums (Opções Padronizadas) ────────────────────────────────────────────
 
-  @@map("access_logs")
+enum PapelUsuario {
+  ALUNO
+  PROFESSOR
+  FUNCIONARIO
+  COORDENADOR
+  GESTOR
+  VISITANTE
+}
+
+enum TipoDispositivo {
+  CATRACA
+  LEITOR_CARTAO
+}
+
+enum StatusAcesso {
+  CONCEDIDO
+  NEGADO
+}
+
+enum FinalidadeLog {
+  ENTRADA_PREDIO
+  PRESENCA_SALA
+}
+
+enum DirecaoAcesso {
+  ENTRADA
+  SAIDA
+}
+
+enum StatusDispositivo {
+  ATIVO
+  INATIVO
+  MANUTENCAO
+}
+
+enum TipoToken {
+  CHAVE_API
+  REFRESH
+  APP
+}
+
+// ─── Modelos (Tabelas) ──────────────────────────────────────────────────────
+
+model Usuario {
+  id             String       @id @default(uuid())
+  nome           String
+  email          String       @unique
+  
+  /// Hash bcrypt ou argon2 — NUNCA guarde a senha em texto limpo
+  hashSenha      String
+  matricula      String?      @unique
+  
+  /// UID do cartão RFID/NFC
+  cartaoId       String?      @unique
+  curso          String?
+  papel          PapelUsuario @default(ALUNO)
+  ativo          Boolean      @default(true)
+  
+  /// Validade para alunos, terceirizados ou visitantes
+  dataExpiracao  DateTime?
+
+  // Relacionamento com Turno
+  turnoId        String?
+  turno          Turno?       @relation(fields: [turnoId], references: [id])
+
+  tokens         Token[]
+  logs           LogAcesso[]
+
+  criadoEm       DateTime     @default(now())
+  atualizadoEm   DateTime     @updatedAt
+
+  @@map("usuarios")
+}
+
+model Token {
+  id           String    @id @default(uuid())
+  tipo         TipoToken
+  
+  /// Guarde apenas o hash SHA-256 do valor real do token
+  hash         String    @unique
+  dataExpiracao DateTime?
+  revogado     Boolean   @default(false)
+  
+  usuarioId    String
+  usuario      Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  criadoEm     DateTime  @default(now())
+
+  @@index([usuarioId])
+  @@map("tokens")
+}
+
+model Turno {
+  id           String    @id @default(uuid())
+  nome         String    // Ex: "Manhã", "Tarde", "Noite"
+  
+  /// Minutos desde a meia-noite — ex: 480 = 08:00, 720 = 12:00
+  horaInicio   Int
+  horaFim      Int
+  
+  /// Array de inteiros do PostgreSQL — ex: [1,2,3,4,5] = Seg–Sex
+  diasSemana   Int[]
+
+  usuarios     Usuario[]
+
+  @@map("turnos")
+}
+
+model Sala {
+  id           String        @id @default(uuid())
+  nome         String
+  bloco        String?
+
+  dispositivos Dispositivo[]
+
+  @@unique([nome, bloco]) // Impede criar duas "Sala 101" no "Bloco A"
+  @@map("salas")
+}
+
+model Dispositivo {
+  id                 String            @id @default(uuid())
+  nome               String
+  tipo               TipoDispositivo   @default(LEITOR_CARTAO)
+  status             StatusDispositivo @default(ATIVO)
+
+  /// Endereço MAC físico do ESP32 — formato: AA:BB:CC:DD:EE:FF
+  enderecoMac        String?           @unique
+  
+  /// Hash SHA-256 da chave secreta que o dispositivo usa para se autenticar
+  hashChaveSeguranca String?
+  ipLocal            String?
+
+  salaId             String
+  sala               Sala              @relation(fields: [salaId], references: [id])
+
+  logs               LogAcesso[]
+
+  @@map("dispositivos")
+}
+
+model LogAcesso {
+  id            String        @id @default(uuid())
+  dataHora      DateTime      @default(now())
+  status        StatusAcesso
+  finalidade    FinalidadeLog @default(ENTRADA_PREDIO)
+  direcao       DirecaoAcesso @default(ENTRADA)
+  
+  /// Ex: "Turno inválido", "Cartão expirado", "Cartão desconhecido: A1B2C3D4"
+  motivo        String?
+
+  /// Nulo quando o UID do cartão não está registrado no sistema
+  usuarioId     String?
+  usuario       Usuario?      @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  /// UID bruto do RFID lido pelo dispositivo — sempre registrado, mesmo sem usuário
+  uidCartao     String?
+
+  dispositivoId String
+  dispositivo   Dispositivo   @relation(fields: [dispositivoId], references: [id], onDelete: Cascade)
+
+  // Índices para otimizar relatórios e buscas do Gestor
+  @@index([dataHora])
+  @@index([usuarioId, dataHora])
+  @@index([dispositivoId, dataHora])
+  @@index([usuarioId, status])
+  
+  @@map("logs_acesso")
 }
