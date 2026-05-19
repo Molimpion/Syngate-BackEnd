@@ -1,32 +1,17 @@
 import 'dotenv/config';
 import { app } from './app';
-import { PrismaClient } from '@prisma/client';
-import { Pool } from 'pg';
-import { PrismaPg } from '@prisma/adapter-pg';
+import { prisma } from './lib/prisma';
 
 console.log('[Debug] Iniciando script de ignição...');
-
-const connectionString = process.env.DATABASE_URL;
-
-if (!connectionString) {
-  console.error('[Erro] DATABASE_URL não encontrada no arquivo .env');
-  process.exit(1);
-}
-
-console.log('[Debug] Criando Pool do PostgreSQL...');
-const pool = new Pool({ connectionString });
-const adapter = new PrismaPg(pool);
-
-console.log('[Debug] Inicializando Prisma Client...');
-const prisma = new PrismaClient({ adapter });
 
 const PORT = process.env.PORT || 3333;
 
 async function bootstrap() {
   try {
     console.log('[Debug] Tentando conectar ao Banco de Dados...');
+    
     await prisma.$connect();
-    console.log('Successfully connected to Database via Prisma Adapter');
+    console.log('Successfully connected to Database via Prisma');
 
     app.listen(PORT, () => {
       console.log(`Syngate Backend running on http://localhost:${PORT}`);
