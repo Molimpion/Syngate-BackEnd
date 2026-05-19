@@ -27,14 +27,14 @@
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@scalar/api-reference": "^1.55.3",
-    "bcryptjs": "^2.4.3",
+    "bcrypt": "^6.0.0",
     "cloudinary": "^1.41.3",
     "cors": "^2.8.5",
     "csv-stringify": "^6.7.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-async-errors": "^3.1.1",
-    "express-rate-limit": "^7.3.1",
+    "express-rate-limit": "^8.5.2",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.3",
     "mqtt": "^5.7.0",
@@ -45,6 +45,7 @@
     "pino": "^9.2.0",
     "pino-http": "^10.1.0",
     "pino-pretty": "^11.2.1",
+    "rate-limit-redis": "^5.0.0",
     "socket.io": "^4.7.5",
     "swagger-ui-express": "^5.0.1",
     "zod": "^3.23.8"
@@ -52,7 +53,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.0.0",
     "@commitlint/config-conventional": "^21.0.0",
-    "@types/bcryptjs": "^2.4.6",
+    "@types/bcrypt": "^6.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
@@ -68,5 +69,8 @@
     "ts-node-dev": "^2.0.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }
