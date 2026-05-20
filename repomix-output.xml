@@ -58,9 +58,15 @@ src/config/scalar-config.ts
 src/config/swagger.ts
 src/lib/prisma.ts
 src/lib/redis.ts
+src/middlewares/auth.middleware.ts
 src/middlewares/error.middleware.ts
 src/middlewares/rate-limit.middleware.ts
+src/middlewares/role.middleware.ts
 src/middlewares/validate.middlewares.ts
+src/modules/auth/auth.controller.ts
+src/modules/auth/auth.routes.ts
+src/modules/auth/auth.service.ts
+src/schemas/auth.schema.ts
 src/server.ts
 src/services/access.service.ts
 src/types/access-log.types.ts
@@ -77,6 +83,483 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="src/middlewares/auth.middleware.ts">
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { redis } from '../lib/redis';
+import { prisma } from '../lib/prisma';
+import { JwtPayload } from '../types/auth.types';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
+
+export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ status: 'error', message: 'Token não fornecido ou inválido.' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const isBlacklisted = await redis.get(`blacklist:${token}`);
+    if (isBlacklisted) {
+      return res.status(401).json({ status: 'error', message: 'Acesso negado. Token revogado.' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+
+    const usuario = await prisma.usuario.findUnique({
+      where: { id: decoded.sub, ativo: true },
+    });
+
+    if (!usuario) {
+      return res.status(401).json({ status: 'error', message: 'Usuário não encontrado ou inativo.' });
+    }
+
+    req.user = { sub: usuario.id, papel: usuario.papel };
+    return next();
+  } catch (error) {
+    return res.status(401).json({ status: 'error', message: 'Token expirado ou inválido.' });
+  }
+};
+</file>
+
+<file path="src/middlewares/role.middleware.ts">
+import { Request, Response, NextFunction } from 'express';
+import { PapelUsuario } from '@prisma/client';
+
+export const roleMiddleware = (papeisPermitidos: PapelUsuario[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ status: 'error', message: 'Usuário não autenticado.' });
+    }
+
+    if (!papeisPermitidos.includes(req.user.papel)) {
+      return res.status(403).json({ status: 'error', message: 'Acesso negado. Privilégios insuficientes.' });
+    }
+
+    return next();
+  };
+};
+</file>
+
+<file path="src/modules/auth/auth.controller.ts">
+import { Request, Response } from 'express';
+import { AuthService } from './auth.service';
+
+export class AuthController {
+  private authService = new AuthService();
+
+  login = async (req: Request, res: Response) => {
+    const { email, senha } = req.body;
+
+    try {
+      const tokens = await this.authService.login({ email, senhaLimpa: senha });
+      return res.status(200).json({ status: 'success', data: tokens });
+    } catch (error: any) {
+      return res.status(401).json({ status: 'error', message: 'Credenciais inválidas.' });
+    }
+  };
+
+  cadastro = async (req: Request, res: Response) => {
+    try {
+      const tokens = await this.authService.cadastro(req.body);
+      return res.status(201).json({ status: 'success', data: tokens });
+    } catch (error: any) {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
+  };
+
+  refresh = async (req: Request, res: Response) => {
+    const { refreshToken } = req.body;
+    try {
+      const tokens = await this.authService.refreshToken(refreshToken);
+      return res.status(200).json({ status: 'success', data: tokens });
+    } catch (error: any) {
+      return res.status(401).json({ status: 'error', message: 'Sessão expirada. Faça login novamente.' });
+    }
+  };
+
+  logout = async (req: Request, res: Response) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+      const token = authHeader.split(' ')[1];
+      await this.authService.logout(token);
+    }
+    return res.status(204).send();
+  };
+}
+</file>
+
+<file path="src/modules/auth/auth.routes.ts">
+import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
+import { redis } from '../../lib/redis';
+import { validate } from '../../middlewares/validate.middlewares';
+import { loginSchema, cadastroSchema, refreshTokenSchema } from '../../schemas/auth.schema';
+import { AuthController } from './auth.controller';
+import { authMiddleware } from '../../middlewares/auth.middleware';
+
+const router = Router();
+const authController = new AuthController();
+
+const authRateLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: async (...args: string[]) => {
+      const [command, ...rest] = args;
+      return redis.call(command, ...rest) as any;
+    },
+    prefix: 'rl:auth:', 
+  }),
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: { status: 'error', message: 'Muitas tentativas de login. Aguarde 15 minutos.' },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+
+router.post('/login', authRateLimiter, validate(loginSchema), authController.login);
+router.post('/cadastro', authRateLimiter, validate(cadastroSchema), authController.cadastro);
+router.post('/refresh', validate(refreshTokenSchema), authController.refresh);
+router.post('/logout', authMiddleware, authController.logout);
+
+export { router as authRouter };
+</file>
+
+<file path="src/modules/auth/auth.service.ts">
+import jwt from 'jsonwebtoken';
+import { randomBytes, createHash } from 'crypto';
+import { prisma } from '../../lib/prisma';
+import { redis } from '../../lib/redis';
+import { comparePassword, hashPassword } from '../../utils/hash';
+import { LoginPayload, TokenResponse } from '../../types/auth.types';
+import { PapelUsuario, TipoToken } from '@prisma/client';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
+const ACCESS_TOKEN_EXPIRES_IN = '15m';
+const REFRESH_TOKEN_EXPIRES_DAYS = 7;
+
+export class AuthService {
+  async login(payload: LoginPayload): Promise<TokenResponse> {
+    const usuario = await prisma.usuario.findUnique({
+      where: { email: payload.email },
+    });
+
+    if (!usuario || !usuario.ativo) {
+      throw new Error('Credenciais inválidas.');
+    }
+
+    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
+    
+    if (!senhaValida) {
+      throw new Error('Credenciais inválidas.');
+    }
+
+    return this.generateTokens(usuario.id, usuario.papel);
+  }
+
+  async logout(accessToken: string): Promise<void> {
+    try {
+      const decoded = jwt.verify(accessToken, JWT_SECRET) as jwt.JwtPayload;
+      if (decoded.exp) {
+        const tempoRestante = decoded.exp - Math.floor(Date.now() / 1000);
+        if (tempoRestante > 0) {
+          await redis.set(`blacklist:${accessToken}`, 'true', 'EX', tempoRestante);
+        }
+      }
+    } catch (error) {
+      // Ignorar se o token já estiver inválido/expirado na hora do logout
+    }
+  }
+
+  async cadastro(dados: any): Promise<TokenResponse> {
+    const usuarioExistente = await prisma.usuario.findUnique({
+      where: { email: dados.email }
+    });
+
+    if (usuarioExistente) {
+      throw new Error('E-mail já está em uso.');
+    }
+
+    const senhaHasheada = await hashPassword(dados.senha);
+
+    const novoUsuario = await prisma.usuario.create({
+      data: {
+        nome: dados.nome,
+        email: dados.email,
+        hashSenha: senhaHasheada,
+        papel: dados.papel || PapelUsuario.ALUNO,
+      }
+    });
+
+    return this.generateTokens(novoUsuario.id, novoUsuario.papel);
+  }
+
+  async refreshToken(tokenString: string): Promise<TokenResponse> {
+    const hash = createHash('sha256').update(tokenString).digest('hex');
+    
+    const tokenSalvo = await prisma.token.findUnique({
+      where: { hash },
+      include: { usuario: true }
+    });
+
+    if (!tokenSalvo || tokenSalvo.revogado || (tokenSalvo.dataExpiracao && tokenSalvo.dataExpiracao < new Date())) {
+      throw new Error('Refresh token inválido ou expirado.');
+    }
+
+    if (!tokenSalvo.usuario.ativo) {
+      throw new Error('Usuário inativo.');
+    }
+
+    // Rotaciona o token
+    await prisma.token.delete({ where: { id: tokenSalvo.id } });
+
+    return this.generateTokens(tokenSalvo.usuarioId, tokenSalvo.usuario.papel);
+  }
+
+  private async generateTokens(usuarioId: string, papel: PapelUsuario): Promise<TokenResponse> {
+    const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET, {
+      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+    });
+
+    const refreshTokenString = randomBytes(40).toString('hex');
+    const refreshTokenHash = createHash('sha256').update(refreshTokenString).digest('hex');
+    const expiracao = new Date();
+    expiracao.setDate(expiracao.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+
+    await prisma.token.create({
+      data: {
+        tipo: TipoToken.REFRESH,
+        hash: refreshTokenHash,
+        usuarioId: usuarioId,
+        dataExpiracao: expiracao,
+      },
+    });
+
+    return { accessToken, refreshToken: refreshTokenString };
+  }
+}
+</file>
+
+<file path="src/schemas/auth.schema.ts">
+import { z } from 'zod';
+import { PapelUsuario } from '@prisma/client';
+
+export const loginSchema = z.object({
+  body: z.object({
+    email: z.string().email('Formato de e-mail inválido.'),
+    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
+  }),
+});
+
+export const cadastroSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres.'),
+    email: z.string().email('Formato de e-mail inválido.'),
+    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
+    papel: z.nativeEnum(PapelUsuario).optional(),
+  }),
+});
+
+export const refreshTokenSchema = z.object({
+  body: z.object({
+    refreshToken: z.string().min(1, 'Refresh token é obrigatório.'),
+  }),
+});
+</file>
+
+<file path=".commitlintrc.json">
+{ "extends": ["@commitlint/config-conventional"] }
+</file>
+
+<file path=".husky/commit-msg">
+npx --no -- commitlint --edit "$1"
+</file>
+
+<file path="LICENSE">
+MIT License
+
+Copyright (c) 2026 Manoel Olímpio
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</file>
+
+<file path="prisma/migrations/20260514233015_schema_enterprise_pt_br/migration.sql">
+-- CreateEnum
+CREATE TYPE "PapelUsuario" AS ENUM ('ALUNO', 'PROFESSOR', 'FUNCIONARIO', 'COORDENADOR', 'GESTOR', 'VISITANTE');
+
+-- CreateEnum
+CREATE TYPE "TipoDispositivo" AS ENUM ('CATRACA', 'LEITOR_CARTAO');
+
+-- CreateEnum
+CREATE TYPE "StatusAcesso" AS ENUM ('CONCEDIDO', 'NEGADO');
+
+-- CreateEnum
+CREATE TYPE "FinalidadeLog" AS ENUM ('ENTRADA_PREDIO', 'PRESENCA_SALA');
+
+-- CreateEnum
+CREATE TYPE "DirecaoAcesso" AS ENUM ('ENTRADA', 'SAIDA');
+
+-- CreateEnum
+CREATE TYPE "StatusDispositivo" AS ENUM ('ATIVO', 'INATIVO', 'MANUTENCAO');
+
+-- CreateEnum
+CREATE TYPE "TipoToken" AS ENUM ('CHAVE_API', 'REFRESH', 'APP');
+
+-- CreateTable
+CREATE TABLE "usuarios" (
+    "id" TEXT NOT NULL,
+    "nome" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "hashSenha" TEXT NOT NULL,
+    "matricula" TEXT,
+    "cartaoId" TEXT,
+    "curso" TEXT,
+    "papel" "PapelUsuario" NOT NULL DEFAULT 'ALUNO',
+    "ativo" BOOLEAN NOT NULL DEFAULT true,
+    "dataExpiracao" TIMESTAMP(3),
+    "turnoId" TEXT,
+    "criadoEm" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "atualizadoEm" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "usuarios_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "tokens" (
+    "id" TEXT NOT NULL,
+    "tipo" "TipoToken" NOT NULL,
+    "hash" TEXT NOT NULL,
+    "dataExpiracao" TIMESTAMP(3),
+    "revogado" BOOLEAN NOT NULL DEFAULT false,
+    "usuarioId" TEXT NOT NULL,
+    "criadoEm" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "tokens_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "turnos" (
+    "id" TEXT NOT NULL,
+    "nome" TEXT NOT NULL,
+    "horaInicio" INTEGER NOT NULL,
+    "horaFim" INTEGER NOT NULL,
+    "diasSemana" INTEGER[],
+
+    CONSTRAINT "turnos_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "salas" (
+    "id" TEXT NOT NULL,
+    "nome" TEXT NOT NULL,
+    "bloco" TEXT,
+
+    CONSTRAINT "salas_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "dispositivos" (
+    "id" TEXT NOT NULL,
+    "nome" TEXT NOT NULL,
+    "tipo" "TipoDispositivo" NOT NULL DEFAULT 'LEITOR_CARTAO',
+    "status" "StatusDispositivo" NOT NULL DEFAULT 'ATIVO',
+    "enderecoMac" TEXT,
+    "hashChaveSeguranca" TEXT,
+    "ipLocal" TEXT,
+    "salaId" TEXT NOT NULL,
+
+    CONSTRAINT "dispositivos_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "logs_acesso" (
+    "id" TEXT NOT NULL,
+    "dataHora" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "status" "StatusAcesso" NOT NULL,
+    "finalidade" "FinalidadeLog" NOT NULL DEFAULT 'ENTRADA_PREDIO',
+    "direcao" "DirecaoAcesso" NOT NULL DEFAULT 'ENTRADA',
+    "motivo" TEXT,
+    "usuarioId" TEXT,
+    "uidCartao" TEXT,
+    "dispositivoId" TEXT NOT NULL,
+
+    CONSTRAINT "logs_acesso_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "usuarios_email_key" ON "usuarios"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "usuarios_matricula_key" ON "usuarios"("matricula");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "usuarios_cartaoId_key" ON "usuarios"("cartaoId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "tokens_hash_key" ON "tokens"("hash");
+
+-- CreateIndex
+CREATE INDEX "tokens_usuarioId_idx" ON "tokens"("usuarioId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "salas_nome_bloco_key" ON "salas"("nome", "bloco");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "dispositivos_enderecoMac_key" ON "dispositivos"("enderecoMac");
+
+-- CreateIndex
+CREATE INDEX "logs_acesso_dataHora_idx" ON "logs_acesso"("dataHora");
+
+-- CreateIndex
+CREATE INDEX "logs_acesso_usuarioId_dataHora_idx" ON "logs_acesso"("usuarioId", "dataHora");
+
+-- CreateIndex
+CREATE INDEX "logs_acesso_dispositivoId_dataHora_idx" ON "logs_acesso"("dispositivoId", "dataHora");
+
+-- CreateIndex
+CREATE INDEX "logs_acesso_usuarioId_status_idx" ON "logs_acesso"("usuarioId", "status");
+
+-- AddForeignKey
+ALTER TABLE "usuarios" ADD CONSTRAINT "usuarios_turnoId_fkey" FOREIGN KEY ("turnoId") REFERENCES "turnos"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "tokens" ADD CONSTRAINT "tokens_usuarioId_fkey" FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "dispositivos" ADD CONSTRAINT "dispositivos_salaId_fkey" FOREIGN KEY ("salaId") REFERENCES "salas"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_usuarioId_fkey" FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_dispositivoId_fkey" FOREIGN KEY ("dispositivoId") REFERENCES "dispositivos"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+</file>
+
+<file path="prisma/migrations/migration_lock.toml">
+# Please do not edit this file manually
+# It should be added in your version-control system (e.g., Git)
+provider = "postgresql"
+</file>
 
 <file path="prisma/seed.ts">
 import { 
@@ -332,6 +815,244 @@ main()
   });
 </file>
 
+<file path="README.md">
+
+</file>
+
+<file path="src/config/scalar-config.ts">
+export const renderScalar = (openapiSpecification: any) => `
+  <!doctype html>
+  <html>
+    <head>
+      <title>Syngate API Reference</title>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <style>
+        body { margin: 0; }
+      </style>
+    </head>
+    <body>
+      <script
+        id="api-reference"
+        data-configuration='${JSON.stringify({
+          spec: { content: openapiSpecification },
+          theme: 'deepSpace',
+          layout: 'modern',
+        })}'></script>
+      <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+    </body>
+  </html>
+`;
+</file>
+
+<file path="src/config/swagger.ts">
+export const openapiSpecification = {
+  openapi: '3.1.0',
+  info: {
+    title: 'Syngate API',
+    version: '1.0.0',
+    description: 'Documentação Oficial do Back-end do Sistema Syngate (IoT & Web)',
+  },
+  servers: [
+    {
+      url: 'http://localhost:3333',
+      description: 'Servidor de Desenvolvimento',
+    },
+  ],
+  components: {
+    securitySchemes: {
+      bearerAuth: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description: 'Insira o Access Token JWT para acessar rotas protegidas.',
+      },
+    },
+  },
+  tags: [
+    { name: 'Sistema', description: 'Rotas de infraestrutura e saúde da API' },
+    { name: 'Autenticação', description: 'Gerenciamento de identidades e sessões' },
+  ],
+  paths: {
+    '/health': {
+      get: {
+        summary: 'Health Check',
+        description: 'Verifica se a API está online e respondendo.',
+        tags: ['Sistema'],
+        responses: {
+          '200': {
+            description: 'Servidor online',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    status: { type: 'string', example: 'ok' },
+                    service: { type: 'string', example: 'syngate-backend' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    '/api/v1/auth/cadastro': {
+      post: {
+        summary: 'Cadastro de Usuário',
+        description: 'Cria um novo usuário e retorna os tokens de acesso.',
+        tags: ['Autenticação'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['nome', 'email', 'senha'],
+                properties: {
+                  nome: { type: 'string', example: 'João Silva' },
+                  email: { type: 'string', example: 'joao@syngate.com' },
+                  senha: { type: 'string', example: 'Senha@123' },
+                  papel: { 
+                    type: 'string', 
+                    enum: ['ALUNO', 'PROFESSOR', 'FUNCIONARIO', 'COORDENADOR', 'GESTOR', 'VISITANTE'],
+                    example: 'ALUNO'
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': {
+            description: 'Usuário criado com sucesso.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    status: { type: 'string', example: 'success' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        accessToken: { type: 'string' },
+                        refreshToken: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '400': { description: 'Erro de validação ou e-mail já em uso.' },
+        },
+      },
+    },
+    '/api/v1/auth/login': {
+      post: {
+        summary: 'Login',
+        description: 'Autentica o usuário e retorna o access token (15m) e refresh token (7d).',
+        tags: ['Autenticação'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['email', 'senha'],
+                properties: {
+                  email: { type: 'string', example: 'admin@syngate.com' },
+                  senha: { type: 'string', example: 'Senha@123' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Login realizado com sucesso.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    status: { type: 'string', example: 'success' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        accessToken: { type: 'string' },
+                        refreshToken: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '401': { description: 'Credenciais inválidas.' },
+        },
+      },
+    },
+    '/api/v1/auth/refresh': {
+      post: {
+        summary: 'Renovar Access Token',
+        description: 'Gera um novo par de tokens utilizando um refresh token válido.',
+        tags: ['Autenticação'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['refreshToken'],
+                properties: {
+                  refreshToken: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Tokens renovados com sucesso.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    status: { type: 'string', example: 'success' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        accessToken: { type: 'string' },
+                        refreshToken: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '401': { description: 'Sessão expirada. Faça login novamente.' },
+        },
+      },
+    },
+    '/api/v1/auth/logout': {
+      post: {
+        summary: 'Logout',
+        description: 'Invalida o token atual adicionando-o à blacklist do Redis.',
+        tags: ['Autenticação'],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '204': { description: 'Logout realizado com sucesso (No Content).' },
+          '401': { description: 'Token não fornecido ou já revogado.' },
+        },
+      },
+    },
+  },
+};
+</file>
+
 <file path="src/lib/prisma.ts">
 import { PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
@@ -425,10 +1146,11 @@ import { redis } from '../lib/redis';
  * Configurado para 100 requisições por IP a cada 15 minutos.
  */
 export const globalRateLimiter = rateLimit({
-  // O RedisStore gerencia a contagem de acessos no banco em memória
   store: new RedisStore({
-    // A tipagem do sendCommand exige uma função que repasse os comandos ao ioredis
-    sendCommand: (...args: string[]) => redis.call(...args),
+    sendCommand: async (...args: string[]) => {
+      const [command, ...rest] = args;
+      return redis.call(command, ...rest) as any;
+    },
   }),
   windowMs: 15 * 60 * 1000, // Janela de 15 minutos
   limit: 100, // Limite de 100 requisições por IP na janela
@@ -436,8 +1158,8 @@ export const globalRateLimiter = rateLimit({
     status: 'error',
     message: 'Muitas requisições originadas deste IP. Por favor, aguarde alguns minutos e tente novamente.',
   },
-  standardHeaders: 'draft-7', // Retorna informações de limite nos headers `RateLimit-*`
-  legacyHeaders: false, // Desabilita os headers legados `X-RateLimit-*`
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
 });
 </file>
 
@@ -474,17 +1196,14 @@ export const validate = (schema: AnyZodObject) => {
 </file>
 
 <file path="src/services/access.service.ts">
-// src/services/access.service.ts
-import { 
-  PrismaClient, 
-  TipoDispositivo, 
-  StatusAcesso, 
-  FinalidadeLog, 
-  DirecaoAcesso 
+import { prisma } from '../lib/prisma';
+import {
+  TipoDispositivo,
+  StatusAcesso,
+  FinalidadeLog,
+  DirecaoAcesso,
 } from '@prisma/client';
 import { isWithinShift } from '../utils/shift-validator';
-
-const prisma = new PrismaClient();
 
 export interface AccessRequestDTO {
   enderecoMac: string;
@@ -737,298 +1456,6 @@ export function isWithinShift(date: Date, turno: Turno): boolean {
 }
 </file>
 
-<file path=".commitlintrc.json">
-{ "extends": ["@commitlint/config-conventional"] }
-</file>
-
-<file path=".husky/commit-msg">
-npx --no -- commitlint --edit "$1"
-</file>
-
-<file path="LICENSE">
-MIT License
-
-Copyright (c) 2026 Manoel Olímpio
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-</file>
-
-<file path="prisma/migrations/20260514233015_schema_enterprise_pt_br/migration.sql">
--- CreateEnum
-CREATE TYPE "PapelUsuario" AS ENUM ('ALUNO', 'PROFESSOR', 'FUNCIONARIO', 'COORDENADOR', 'GESTOR', 'VISITANTE');
-
--- CreateEnum
-CREATE TYPE "TipoDispositivo" AS ENUM ('CATRACA', 'LEITOR_CARTAO');
-
--- CreateEnum
-CREATE TYPE "StatusAcesso" AS ENUM ('CONCEDIDO', 'NEGADO');
-
--- CreateEnum
-CREATE TYPE "FinalidadeLog" AS ENUM ('ENTRADA_PREDIO', 'PRESENCA_SALA');
-
--- CreateEnum
-CREATE TYPE "DirecaoAcesso" AS ENUM ('ENTRADA', 'SAIDA');
-
--- CreateEnum
-CREATE TYPE "StatusDispositivo" AS ENUM ('ATIVO', 'INATIVO', 'MANUTENCAO');
-
--- CreateEnum
-CREATE TYPE "TipoToken" AS ENUM ('CHAVE_API', 'REFRESH', 'APP');
-
--- CreateTable
-CREATE TABLE "usuarios" (
-    "id" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "email" TEXT NOT NULL,
-    "hashSenha" TEXT NOT NULL,
-    "matricula" TEXT,
-    "cartaoId" TEXT,
-    "curso" TEXT,
-    "papel" "PapelUsuario" NOT NULL DEFAULT 'ALUNO',
-    "ativo" BOOLEAN NOT NULL DEFAULT true,
-    "dataExpiracao" TIMESTAMP(3),
-    "turnoId" TEXT,
-    "criadoEm" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "atualizadoEm" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "usuarios_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "tokens" (
-    "id" TEXT NOT NULL,
-    "tipo" "TipoToken" NOT NULL,
-    "hash" TEXT NOT NULL,
-    "dataExpiracao" TIMESTAMP(3),
-    "revogado" BOOLEAN NOT NULL DEFAULT false,
-    "usuarioId" TEXT NOT NULL,
-    "criadoEm" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "tokens_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "turnos" (
-    "id" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "horaInicio" INTEGER NOT NULL,
-    "horaFim" INTEGER NOT NULL,
-    "diasSemana" INTEGER[],
-
-    CONSTRAINT "turnos_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "salas" (
-    "id" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "bloco" TEXT,
-
-    CONSTRAINT "salas_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "dispositivos" (
-    "id" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "tipo" "TipoDispositivo" NOT NULL DEFAULT 'LEITOR_CARTAO',
-    "status" "StatusDispositivo" NOT NULL DEFAULT 'ATIVO',
-    "enderecoMac" TEXT,
-    "hashChaveSeguranca" TEXT,
-    "ipLocal" TEXT,
-    "salaId" TEXT NOT NULL,
-
-    CONSTRAINT "dispositivos_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "logs_acesso" (
-    "id" TEXT NOT NULL,
-    "dataHora" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "status" "StatusAcesso" NOT NULL,
-    "finalidade" "FinalidadeLog" NOT NULL DEFAULT 'ENTRADA_PREDIO',
-    "direcao" "DirecaoAcesso" NOT NULL DEFAULT 'ENTRADA',
-    "motivo" TEXT,
-    "usuarioId" TEXT,
-    "uidCartao" TEXT,
-    "dispositivoId" TEXT NOT NULL,
-
-    CONSTRAINT "logs_acesso_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "usuarios_email_key" ON "usuarios"("email");
-
--- CreateIndex
-CREATE UNIQUE INDEX "usuarios_matricula_key" ON "usuarios"("matricula");
-
--- CreateIndex
-CREATE UNIQUE INDEX "usuarios_cartaoId_key" ON "usuarios"("cartaoId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "tokens_hash_key" ON "tokens"("hash");
-
--- CreateIndex
-CREATE INDEX "tokens_usuarioId_idx" ON "tokens"("usuarioId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "salas_nome_bloco_key" ON "salas"("nome", "bloco");
-
--- CreateIndex
-CREATE UNIQUE INDEX "dispositivos_enderecoMac_key" ON "dispositivos"("enderecoMac");
-
--- CreateIndex
-CREATE INDEX "logs_acesso_dataHora_idx" ON "logs_acesso"("dataHora");
-
--- CreateIndex
-CREATE INDEX "logs_acesso_usuarioId_dataHora_idx" ON "logs_acesso"("usuarioId", "dataHora");
-
--- CreateIndex
-CREATE INDEX "logs_acesso_dispositivoId_dataHora_idx" ON "logs_acesso"("dispositivoId", "dataHora");
-
--- CreateIndex
-CREATE INDEX "logs_acesso_usuarioId_status_idx" ON "logs_acesso"("usuarioId", "status");
-
--- AddForeignKey
-ALTER TABLE "usuarios" ADD CONSTRAINT "usuarios_turnoId_fkey" FOREIGN KEY ("turnoId") REFERENCES "turnos"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "tokens" ADD CONSTRAINT "tokens_usuarioId_fkey" FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "dispositivos" ADD CONSTRAINT "dispositivos_salaId_fkey" FOREIGN KEY ("salaId") REFERENCES "salas"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_usuarioId_fkey" FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_dispositivoId_fkey" FOREIGN KEY ("dispositivoId") REFERENCES "dispositivos"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-</file>
-
-<file path="prisma/migrations/migration_lock.toml">
-# Please do not edit this file manually
-# It should be added in your version-control system (e.g., Git)
-provider = "postgresql"
-</file>
-
-<file path="README.md">
-
-</file>
-
-<file path="src/config/scalar-config.ts">
-export const renderScalar = (openapiSpecification: any) => `
-  <!doctype html>
-  <html>
-    <head>
-      <title>Syngate API Reference</title>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <style>
-        body { margin: 0; }
-      </style>
-    </head>
-    <body>
-      <script
-        id="api-reference"
-        data-configuration='${JSON.stringify({
-          spec: { content: openapiSpecification },
-          theme: 'deepSpace',
-          layout: 'modern',
-        })}'></script>
-      <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-    </body>
-  </html>
-`;
-</file>
-
-<file path="src/config/swagger.ts">
-export const openapiSpecification = {
-  openapi: '3.1.0',
-  info: {
-    title: 'Syngate API',
-    version: '1.0.0',
-    description: 'Documentação Oficial do Back-end do Sistema Syngate (IoT & Web)',
-  },
-  servers: [
-    {
-      url: 'http://localhost:3333',
-      description: 'Servidor de Desenvolvimento',
-    },
-  ],
-  paths: {
-    '/health': {
-      get: {
-        summary: 'Health Check',
-        description: 'Verifica se a API está online e respondendo.',
-        tags: ['Sistema'],
-        responses: {
-          '200': {
-            description: 'Servidor online',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'ok' },
-                    service: { type: 'string', example: 'syngate-backend' },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-};
-</file>
-
-<file path="src/server.ts">
-import { Redis } from 'ioredis';
-
-const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-
-const globalForRedis = global as unknown as { redis: Redis };
-
-export const redis =
-  globalForRedis.redis ||
-  new Redis(redisUrl, {
-    maxRetriesPerRequest: null,
-    retryStrategy(times: number) {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForRedis.redis = redis;
-}
-
-redis.on('error', (err: Error) => {
-  console.error('[Redis Error] Falha na conexão com o Redis:', err.message);
-});
-
-redis.on('connect', () => {
-  console.log('[Redis] Conectado com sucesso.');
-});
-</file>
-
 <file path=".gitignore">
 node_modules/
 .env
@@ -1080,6 +1507,35 @@ export default defineConfig({
 });
 </file>
 
+<file path="src/server.ts">
+import 'dotenv/config';
+import { app } from './app';
+import { prisma } from './lib/prisma';
+
+console.log('[Debug] Iniciando script de ignição...');
+
+const PORT = process.env.PORT || 3333;
+
+async function bootstrap() {
+  try {
+    console.log('[Debug] Tentando conectar ao Banco de Dados...');
+    
+    await prisma.$connect();
+    console.log('Successfully connected to Database via Prisma');
+
+    app.listen(PORT, () => {
+      console.log(`Syngate Backend running on http://localhost:${PORT}`);
+    });
+  } catch (error) {
+    console.error('[Erro Fatal] Falha ao iniciar o servidor:', error);
+    await prisma.$disconnect();
+    process.exit(1);
+  }
+}
+
+bootstrap();
+</file>
+
 <file path="tsconfig.json">
 {
   "compilerOptions": {
@@ -1099,85 +1555,6 @@ export default defineConfig({
     "prisma.config.ts"
   ],
   "exclude": ["node_modules", "dist"]
-}
-</file>
-
-<file path="package.json">
-{
-  "name": "syngate-backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "services:up": "docker compose up -d",
-    "services:down": "docker compose down",
-    "services:logs": "docker compose logs -f"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Molimpion/Syngate-BackEnd.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/Molimpion/Syngate-BackEnd/issues"
-  },
-  "homepage": "https://github.com/Molimpion/Syngate-BackEnd#readme",
-  "dependencies": {
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "^7.8.0",
-    "@scalar/api-reference": "^1.55.3",
-    "bcrypt": "^6.0.0",
-    "cloudinary": "^1.41.3",
-    "cors": "^2.8.5",
-    "csv-stringify": "^6.7.0",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "express-async-errors": "^3.1.1",
-    "express-rate-limit": "^8.5.2",
-    "helmet": "^7.1.0",
-    "jsonwebtoken": "^9.0.3",
-    "mqtt": "^5.7.0",
-    "multer": "^2.1.1",
-    "multer-storage-cloudinary": "^4.0.0",
-    "pdfkit": "^0.18.0",
-    "pg": "^8.12.0",
-    "pino": "^9.2.0",
-    "pino-http": "^10.1.0",
-    "pino-pretty": "^11.2.1",
-    "rate-limit-redis": "^5.0.0",
-    "socket.io": "^4.7.5",
-    "swagger-ui-express": "^5.0.1",
-    "zod": "^3.23.8"
-  },
-  "devDependencies": {
-    "@commitlint/cli": "^21.0.0",
-    "@commitlint/config-conventional": "^21.0.0",
-    "@types/bcrypt": "^6.0.0",
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/jsonwebtoken": "^9.0.10",
-    "@types/multer": "^2.1.0",
-    "@types/node": "^25.7.0",
-    "@types/pdfkit": "^0.17.6",
-    "@types/pg": "^8.20.0",
-    "@types/pino-http": "^5.8.4",
-    "@types/swagger-ui-express": "^4.1.8",
-    "husky": "^9.1.7",
-    "prisma": "^7.8.0",
-    "repomix": "^1.14.0",
-    "ts-node-dev": "^2.0.0",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.3"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
-  }
 }
 </file>
 
@@ -1373,6 +1750,87 @@ model LogAcesso {
 }
 </file>
 
+<file path="package.json">
+{
+  "name": "syngate-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "services:up": "docker compose up -d",
+    "services:down": "docker compose down",
+    "services:logs": "docker compose logs -f"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Molimpion/Syngate-BackEnd.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Molimpion/Syngate-BackEnd/issues"
+  },
+  "homepage": "https://github.com/Molimpion/Syngate-BackEnd#readme",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@scalar/api-reference": "^1.55.3",
+    "bcrypt": "^6.0.0",
+    "cloudinary": "^1.41.3",
+    "cors": "^2.8.5",
+    "csv-stringify": "^6.7.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^7.1.0",
+    "ioredis": "^5.10.1",
+    "jsonwebtoken": "^9.0.3",
+    "mqtt": "^5.7.0",
+    "multer": "^2.1.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "pdfkit": "^0.18.0",
+    "pg": "^8.12.0",
+    "pino": "^9.2.0",
+    "pino-http": "^10.1.0",
+    "pino-pretty": "^11.2.1",
+    "rate-limit-redis": "^5.0.0",
+    "socket.io": "^4.7.5",
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.0.0",
+    "@commitlint/config-conventional": "^21.0.0",
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/ioredis": "^4.28.10",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^25.7.0",
+    "@types/pdfkit": "^0.17.6",
+    "@types/pg": "^8.20.0",
+    "@types/pino-http": "^5.8.4",
+    "@types/swagger-ui-express": "^4.1.8",
+    "husky": "^9.1.7",
+    "prisma": "^7.8.0",
+    "repomix": "^1.14.0",
+    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}
+</file>
+
 <file path="src/app.ts">
 import 'express-async-errors';
 import express from 'express';
@@ -1385,6 +1843,7 @@ import { openapiSpecification } from './config/swagger';
 import { renderScalar } from './config/scalar-config';
 import { globalRateLimiter } from './middlewares/rate-limit.middleware';
 import { errorHandler } from './middlewares/error.middleware';
+import { authRouter } from './modules/auth/auth.routes';
 
 const app = express();
 
@@ -1413,7 +1872,10 @@ app.use(
     },
   })
 );
-app.use(cors());
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') ?? '*',
+}));
+
 app.use(express.json());
 
 // --- Rotas de Infraestrutura (Isentas de Rate Limit) ---
@@ -1428,15 +1890,12 @@ app.get('/docs', (req, res) => {
 });
 
 // --- Barreira de Proteção contra Força Bruta e DDoS ---
-// Aplicado aqui para proteger apenas as rotas de negócio subsequentes
 app.use(globalRateLimiter);
 
-// TODO: Inserir os roteadores da API aqui
-// Exemplo futuro: app.use('/api/v1/auth', authRouter);
-// Exemplo futuro: app.use('/api/v1/acesso', accessRouter);
+// --- Roteadores da API ---
+app.use('/api/v1/auth', authRouter);
 
 // --- Middleware de Tratamento Global de Erros ---
-// DEVE ser o último middleware registrado na aplicação
 app.use(errorHandler);
 
 export { app };
