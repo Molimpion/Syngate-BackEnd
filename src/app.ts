@@ -9,6 +9,7 @@ import { openapiSpecification } from './config/swagger';
 import { renderScalar } from './config/scalar-config';
 import { globalRateLimiter } from './middlewares/rate-limit.middleware';
 import { errorHandler } from './middlewares/error.middleware';
+import { authRouter } from './modules/auth/auth.routes';
 
 const app = express();
 
@@ -37,7 +38,10 @@ app.use(
     },
   })
 );
-app.use(cors());
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') ?? '*',
+}));
+
 app.use(express.json());
 
 // --- Rotas de Infraestrutura (Isentas de Rate Limit) ---
@@ -52,15 +56,12 @@ app.get('/docs', (req, res) => {
 });
 
 // --- Barreira de Proteção contra Força Bruta e DDoS ---
-// Aplicado aqui para proteger apenas as rotas de negócio subsequentes
 app.use(globalRateLimiter);
 
-// TODO: Inserir os roteadores da API aqui
-// Exemplo futuro: app.use('/api/v1/auth', authRouter);
-// Exemplo futuro: app.use('/api/v1/acesso', accessRouter);
+// --- Roteadores da API ---
+app.use('/api/v1/auth', authRouter);
 
 // --- Middleware de Tratamento Global de Erros ---
-// DEVE ser o último middleware registrado na aplicação
 app.use(errorHandler);
 
 export { app };
