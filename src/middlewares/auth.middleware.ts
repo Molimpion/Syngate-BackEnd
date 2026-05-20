@@ -10,7 +10,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ status: 'error', message: 'Token não fornecido ou inválido.' });
+    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
   }
 
   const token = authHeader.split(' ')[1];
@@ -18,7 +18,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
   try {
     const isBlacklisted = await redis.get(`blacklist:${token}`);
     if (isBlacklisted) {
-      return res.status(401).json({ status: 'error', message: 'Acesso negado. Token revogado.' });
+      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
     }
 
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
@@ -28,7 +28,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     });
 
     if (!usuario) {
-      return res.status(401).json({ status: 'error', message: 'Usuário não encontrado ou inativo.' });
+      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
     }
 
     req.user = { sub: usuario.id, papel: usuario.papel };
