@@ -10,6 +10,7 @@ import { renderScalar } from './config/scalar-config';
 import { globalRateLimiter } from './middlewares/rate-limit.middleware';
 import { errorHandler } from './middlewares/error.middleware';
 import { authRouter } from './modules/auth/auth.routes';
+import { usersRouter } from './modules/users/users.routes';
 
 const app = express();
 
@@ -24,7 +25,6 @@ const logger = pinoHttp({
   },
 });
 
-// --- Middlewares de Segurança e Parse ---
 app.use(logger);
 app.use(
   helmet({
@@ -44,24 +44,22 @@ app.use(cors({
 
 app.use(express.json());
 
-// --- Rotas de Infraestrutura (Isentas de Rate Limit) ---
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'syngate-backend' });
 });
 
-app.use('/swagger', swaggerUi.serve, swaggerUi.setup(openapiSpecification));
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/swagger', swaggerUi.serve, swaggerUi.setup(openapiSpecification));
+  app.get('/docs', (req, res) => {
+    res.send(renderScalar(openapiSpecification));
+  });
+}
 
-app.get('/docs', (req, res) => {
-  res.send(renderScalar(openapiSpecification));
-});
-
-// --- Barreira de Proteção contra Força Bruta e DDoS ---
 app.use(globalRateLimiter);
 
-// --- Roteadores da API ---
 app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/users', usersRouter);
 
-// --- Middleware de Tratamento Global de Erros ---
 app.use(errorHandler);
 
 export { app };
