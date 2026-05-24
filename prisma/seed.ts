@@ -69,7 +69,7 @@ async function main() {
   // 3. DISPOSITIVOS (IoT)
   // ---------------------------------------------------------
   console.log('🔌 Criando Dispositivos IoT...');
-  const fakeDeviceSecret = 'super-secret-key-123'; // Simula a chave gravada no firmware C++ do ESP32
+  const fakeDeviceSecret = 'super-secret-key-123';
   const hashedDeviceKey = hashDeviceKey(fakeDeviceSecret);
 
   const catracaEntrada = await prisma.dispositivo.upsert({
@@ -167,7 +167,6 @@ async function main() {
   // ---------------------------------------------------------
   console.log('📊 Gerando Logs de Acesso para testes de UI...');
   
-  // Evitamos recriar logs infinitamente se rodarmos o seed várias vezes
   const totalLogs = await prisma.logAcesso.count();
   
   if (totalLogs === 0) {

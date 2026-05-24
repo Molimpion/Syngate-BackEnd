@@ -14,13 +14,10 @@ import { PapelUsuario } from '@prisma/client';
 const router = Router();
 const usersController = new UsersController();
 
-// Camada 1: Autenticação obrigatória
 router.use(authMiddleware);
 
-// Rota de Perfil (Isenta de restrição administrativa, ID inferido via token JWT)
 router.get('/me', usersController.getProfile);
 
-// Camada 2: Apenas Gestores e Coordenadores a partir daqui
 const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
 router.use(roleMiddleware(adminRoles));
 

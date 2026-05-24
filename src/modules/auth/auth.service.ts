@@ -116,7 +116,6 @@ export class AuthService {
       throw new Error('Usuário inativo.');
     }
 
-    // Rotaciona o token
     await prisma.token.delete({ where: { id: tokenSalvo.id } });
 
     return this.generateTokens(tokenSalvo.usuarioId, tokenSalvo.usuario.papel);
