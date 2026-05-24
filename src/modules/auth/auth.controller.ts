@@ -11,14 +11,32 @@ export class AuthController {
       const tokens = await this.authService.login({ email, senhaLimpa: senha });
       return res.status(200).json({ status: 'success', data: tokens });
     } catch (error: any) {
+      if (error.message === 'E-mail não verificado.') {
+        return res.status(403).json({ status: 'error', message: error.message });
+      }
       return res.status(401).json({ status: 'error', message: 'Credenciais inválidas.' });
     }
   };
 
   cadastro = async (req: Request, res: Response) => {
     try {
-      const tokens = await this.authService.cadastro(req.body);
-      return res.status(201).json({ status: 'success', data: tokens });
+      const resultado = await this.authService.cadastro(req.body);
+      return res.status(201).json({ status: 'success', data: resultado });
+    } catch (error: any) {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
+  };
+
+  verificarEmail = async (req: Request, res: Response) => {
+    const { token } = req.query;
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ status: 'error', message: 'Token de verificação ausente ou inválido.' });
+    }
+
+    try {
+      const resultado = await this.authService.verificarEmail(token);
+      return res.status(200).json({ status: 'success', data: resultado });
     } catch (error: any) {
       return res.status(400).json({ status: 'error', message: error.message });
     }

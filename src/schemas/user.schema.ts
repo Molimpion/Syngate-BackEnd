@@ -22,7 +22,7 @@ export const updateUserSchema = z.object({
     papel: z.nativeEnum(PapelUsuario).optional(),
     turnoId: z.string().uuid().optional(),
     ativo: z.boolean().optional(),
-  }),
+  }).strict(),
   params: z.object({
     id: z.string().uuid('ID de usuário inválido.'),
   }),

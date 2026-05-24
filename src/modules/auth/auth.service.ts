@@ -20,8 +20,11 @@ export class AuthService {
       throw new Error('Credenciais inválidas.');
     }
 
-    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
+    if (!usuario.emailVerificado) {
+      throw new Error('E-mail não verificado.');
+    }
 
+    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
     if (!senhaValida) {
       throw new Error('Credenciais inválidas.');
     }
@@ -38,12 +41,11 @@ export class AuthService {
           await redis.set(`blacklist:${accessToken}`, 'true', 'EX', tempoRestante);
         }
       }
-    } catch (error) {
-      // Ignorar se o token já estiver inválido/expirado na hora do logout
+    } catch {
     }
   }
 
-  async cadastro(dados: CadastroPayload): Promise<TokenResponse> {
+  async cadastro(dados: CadastroPayload): Promise<{ message: string }> {
     const usuarioExistente = await prisma.usuario.findUnique({
       where: { email: dados.email },
     });
@@ -54,16 +56,44 @@ export class AuthService {
 
     const senhaHasheada = await hashPassword(dados.senha);
 
-    const novoUsuario = await prisma.usuario.create({
+    const tokenVerificacao = randomBytes(32).toString('hex');
+
+    await prisma.usuario.create({
       data: {
         nome: dados.nome,
         email: dados.email,
         hashSenha: senhaHasheada,
         papel: dados.papel ?? PapelUsuario.ALUNO,
+        emailVerificado: false,
+        tokenVerificacao,
       },
     });
 
-    return this.generateTokens(novoUsuario.id, novoUsuario.papel);
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DEV] Token de verificação para ${dados.email}: ${tokenVerificacao}`);
+    }
+
+    return { message: 'Cadastro realizado. Verifique seu e-mail para ativar a conta.' };
+  }
+
+  async verificarEmail(token: string): Promise<{ message: string }> {
+    const usuario = await prisma.usuario.findUnique({
+      where: { tokenVerificacao: token },
+    });
+
+    if (!usuario) {
+      throw new Error('Token de verificação inválido ou já utilizado.');
+    }
+
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        emailVerificado: true,
+        tokenVerificacao: null,
+      },
+    });
+
+    return { message: 'E-mail verificado com sucesso. Você já pode fazer login.' };
   }
 
   async refreshToken(tokenString: string): Promise<TokenResponse> {

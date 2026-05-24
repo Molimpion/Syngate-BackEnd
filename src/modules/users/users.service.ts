@@ -2,6 +2,7 @@ import { prisma } from '../../lib/prisma';
 import { hashPassword } from '../../utils/hash';
 import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../types/user.types';
 
+// Centraliza os campos de retorno para blindar o sistema contra vazamento do hashSenha
 const USER_SELECT_FIELDS = {
   id: true,
   nome: true,
@@ -46,7 +47,7 @@ export class UsersService {
         turnoId: data.turnoId,
       },
       select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico>;
+    });
   }
 
   async findAll(page: number = 1, limit: number = 10, search?: string) {
@@ -88,18 +89,17 @@ export class UsersService {
     return prisma.usuario.findUnique({
       where: { id },
       select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico | null>;
+    });
   }
 
   async update(id: string, data: UpdateUsuarioPayload): Promise<UsuarioPublico> {
-    // Desestruturação explícita — garante que apenas campos permitidos chegam ao banco
-    const { nome, email, matricula, curso, papel, turnoId, ativo } = data;
-
+    const { ...dadosSeguros } = data;
+    
     return prisma.usuario.update({
       where: { id },
-      data: { nome, email, matricula, curso, papel, turnoId, ativo },
+      data: dadosSeguros,
       select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico>;
+    });
   }
 
   async softDelete(id: string): Promise<UsuarioPublico> {
@@ -107,7 +107,7 @@ export class UsersService {
       where: { id },
       data: { ativo: false },
       select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico>;
+    });
   }
 
   async linkCard(id: string, cartaoId: string | null): Promise<UsuarioPublico> {
@@ -122,6 +122,6 @@ export class UsersService {
       where: { id },
       data: { cartaoId },
       select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico>;
+    });
   }
 }
