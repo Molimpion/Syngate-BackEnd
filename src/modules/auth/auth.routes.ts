@@ -16,18 +16,19 @@ const authRateLimiter = rateLimit({
       const [command, ...rest] = args;
       return redis.call(command, ...rest) as any;
     },
-    prefix: 'rl:auth:', 
+    prefix: 'rl:auth:',
   }),
   windowMs: 15 * 60 * 1000,
   limit: 10,
-  message: { status: 'error', message: 'Muitas tentativas de login. Aguarde 15 minutos.' },
+  message: { status: 'error', message: 'Muitas tentativas. Aguarde 15 minutos.' },
   standardHeaders: 'draft-7',
   legacyHeaders: false,
 });
 
-router.post('/login', authRateLimiter, validate(loginSchema), authController.login);
-router.post('/cadastro', authRateLimiter, validate(cadastroSchema), authController.cadastro);
-router.post('/refresh', validate(refreshTokenSchema), authController.refresh);
-router.post('/logout', authMiddleware, authController.logout);
+router.post('/login',          authRateLimiter, validate(loginSchema),        authController.login);
+router.post('/cadastro',       authRateLimiter, validate(cadastroSchema),     authController.cadastro);
+router.get( '/verificar-email',                                                authController.verificarEmail);
+router.post('/refresh',                         validate(refreshTokenSchema), authController.refresh);
+router.post('/logout',         authMiddleware,                                 authController.logout);
 
 export { router as authRouter };

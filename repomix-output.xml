@@ -48,8 +48,8 @@ docker-compose.yml
 LICENSE
 package.json
 prisma.config.ts
-prisma/migrations/20260514233015_schema_enterprise_pt_br/migration.sql
-prisma/migrations/20260522142807_add_trgm_indexes/migration.sql
+prisma/migrations/20260524180949_initial_schema/migration.sql
+prisma/migrations/20260524182854_sync_gin_indexes/migration.sql
 prisma/migrations/migration_lock.toml
 prisma/schema.prisma
 prisma/seed.ts
@@ -88,305 +88,182 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
-<file path="prisma/migrations/20260522142807_add_trgm_indexes/migration.sql">
+<file path="prisma/migrations/20260524180949_initial_schema/migration.sql">
+-- Migration: initial_schema
+-- Schema completo do Syngate — tabelas, enums, índices e extensões numa migration só
+
+-- ─── Extensões ───────────────────────────────────────────────────────────────
+
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-CREATE INDEX idx_usuarios_nome_trgm  ON usuarios USING GIN (nome  gin_trgm_ops);
-CREATE INDEX idx_usuarios_email_trgm ON usuarios USING GIN (email gin_trgm_ops);
+-- ─── Enums ───────────────────────────────────────────────────────────────────
+
+CREATE TYPE "PapelUsuario" AS ENUM (
+  'ALUNO',
+  'PROFESSOR',
+  'FUNCIONARIO',
+  'COORDENADOR',
+  'GESTOR',
+  'VISITANTE'
+);
+
+CREATE TYPE "TipoDispositivo" AS ENUM (
+  'CATRACA',
+  'LEITOR_CARTAO'
+);
+
+CREATE TYPE "StatusAcesso" AS ENUM (
+  'CONCEDIDO',
+  'NEGADO'
+);
+
+CREATE TYPE "FinalidadeLog" AS ENUM (
+  'ENTRADA_PREDIO',
+  'PRESENCA_SALA'
+);
+
+CREATE TYPE "DirecaoAcesso" AS ENUM (
+  'ENTRADA',
+  'SAIDA'
+);
+
+CREATE TYPE "StatusDispositivo" AS ENUM (
+  'ATIVO',
+  'INATIVO',
+  'MANUTENCAO'
+);
+
+CREATE TYPE "TipoToken" AS ENUM (
+  'CHAVE_API',
+  'REFRESH',
+  'APP'
+);
+
+-- ─── Tabelas ─────────────────────────────────────────────────────────────────
+
+CREATE TABLE "turnos" (
+  "id"         TEXT NOT NULL,
+  "nome"       TEXT NOT NULL,
+  "horaInicio" INTEGER NOT NULL,
+  "horaFim"    INTEGER NOT NULL,
+  "diasSemana" INTEGER[],
+  CONSTRAINT "turnos_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "usuarios" (
+  "id"               TEXT NOT NULL,
+  "nome"             TEXT NOT NULL,
+  "email"            TEXT NOT NULL,
+  "hashSenha"        TEXT NOT NULL,
+  "matricula"        TEXT,
+  "cartaoId"         TEXT,
+  "curso"            TEXT,
+  "papel"            "PapelUsuario" NOT NULL DEFAULT 'ALUNO',
+  "ativo"            BOOLEAN NOT NULL DEFAULT true,
+  "dataExpiracao"    TIMESTAMP(3),
+  "emailVerificado"  BOOLEAN NOT NULL DEFAULT false,
+  "tokenVerificacao" TEXT,
+  "turnoId"          TEXT,
+  "criadoEm"         TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "atualizadoEm"     TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "usuarios_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "tokens" (
+  "id"            TEXT NOT NULL,
+  "tipo"          "TipoToken" NOT NULL,
+  "hash"          TEXT NOT NULL,
+  "dataExpiracao" TIMESTAMP(3),
+  "revogado"      BOOLEAN NOT NULL DEFAULT false,
+  "usuarioId"     TEXT NOT NULL,
+  "criadoEm"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "tokens_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "salas" (
+  "id"    TEXT NOT NULL,
+  "nome"  TEXT NOT NULL,
+  "bloco" TEXT,
+  CONSTRAINT "salas_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "dispositivos" (
+  "id"                 TEXT NOT NULL,
+  "nome"               TEXT NOT NULL,
+  "tipo"               "TipoDispositivo"   NOT NULL DEFAULT 'LEITOR_CARTAO',
+  "status"             "StatusDispositivo" NOT NULL DEFAULT 'ATIVO',
+  "enderecoMac"        TEXT,
+  "hashChaveSeguranca" TEXT,
+  "ipLocal"            TEXT,
+  "salaId"             TEXT NOT NULL,
+  CONSTRAINT "dispositivos_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "logs_acesso" (
+  "id"            TEXT NOT NULL,
+  "dataHora"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "status"        "StatusAcesso" NOT NULL,
+  "finalidade"    "FinalidadeLog"   NOT NULL DEFAULT 'ENTRADA_PREDIO',
+  "direcao"       "DirecaoAcesso"   NOT NULL DEFAULT 'ENTRADA',
+  "motivo"        TEXT,
+  "usuarioId"     TEXT,
+  "uidCartao"     TEXT,
+  "dispositivoId" TEXT NOT NULL,
+  CONSTRAINT "logs_acesso_pkey" PRIMARY KEY ("id")
+);
+
+-- ─── Unique Constraints ───────────────────────────────────────────────────────
+
+CREATE UNIQUE INDEX "usuarios_email_key"            ON "usuarios"("email");
+CREATE UNIQUE INDEX "usuarios_matricula_key"         ON "usuarios"("matricula");
+CREATE UNIQUE INDEX "usuarios_cartaoId_key"          ON "usuarios"("cartaoId");
+CREATE UNIQUE INDEX "usuarios_tokenVerificacao_key"  ON "usuarios"("tokenVerificacao");
+CREATE UNIQUE INDEX "tokens_hash_key"                ON "tokens"("hash");
+CREATE UNIQUE INDEX "salas_nome_bloco_key"           ON "salas"("nome", "bloco");
+CREATE UNIQUE INDEX "dispositivos_enderecoMac_key"   ON "dispositivos"("enderecoMac");
+
+-- ─── Índices B-Tree (performance em filtros comuns) ───────────────────────────
+
+CREATE INDEX "tokens_usuarioId_idx"                    ON "tokens"("usuarioId");
+CREATE INDEX "logs_acesso_dataHora_idx"                ON "logs_acesso"("dataHora");
+CREATE INDEX "logs_acesso_usuarioId_dataHora_idx"      ON "logs_acesso"("usuarioId", "dataHora");
+CREATE INDEX "logs_acesso_dispositivoId_dataHora_idx"  ON "logs_acesso"("dispositivoId", "dataHora");
+CREATE INDEX "logs_acesso_usuarioId_status_idx"        ON "logs_acesso"("usuarioId", "status");
+
+-- ─── Índices GIN pg_trgm (buscas ILIKE performáticas) ────────────────────────
+
+CREATE INDEX "idx_usuarios_nome_trgm"  ON "usuarios" USING GIN ("nome"  gin_trgm_ops);
+CREATE INDEX "idx_usuarios_email_trgm" ON "usuarios" USING GIN ("email" gin_trgm_ops);
+
+-- ─── Foreign Keys ─────────────────────────────────────────────────────────────
+
+ALTER TABLE "usuarios" ADD CONSTRAINT "usuarios_turnoId_fkey"
+  FOREIGN KEY ("turnoId") REFERENCES "turnos"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE "tokens" ADD CONSTRAINT "tokens_usuarioId_fkey"
+  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
+  ON DELETE CASCADE ON UPDATE CASCADE;
+
+ALTER TABLE "dispositivos" ADD CONSTRAINT "dispositivos_salaId_fkey"
+  FOREIGN KEY ("salaId") REFERENCES "salas"("id")
+  ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_usuarioId_fkey"
+  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_dispositivoId_fkey"
+  FOREIGN KEY ("dispositivoId") REFERENCES "dispositivos"("id")
+  ON DELETE CASCADE ON UPDATE CASCADE;
 </file>
 
-<file path="src/modules/users/users.controller.ts">
-import { Request, Response } from 'express';
-import { UsersService } from './users.service';
+<file path="prisma/migrations/20260524182854_sync_gin_indexes/migration.sql">
+-- RenameIndex
+ALTER INDEX "idx_usuarios_email_trgm" RENAME TO "usuarios_email_idx";
 
-export class UsersController {
-  private usersService = new UsersService();
-
-  create = async (req: Request, res: Response) => {
-    try {
-      const user = await this.usersService.create(req.body);
-      return res.status(201).json({ status: 'success', data: user });
-    } catch (error: any) {
-      if (error.message.startsWith('409:')) {
-        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
-      }
-      throw error;
-    }
-  };
-
-  findAll = async (req: Request, res: Response) => {
-    const page = Number(req.query.page);
-    const limit = Number(req.query.limit);
-    const search = req.query.search as string | undefined;
-
-    const result = await this.usersService.findAll(page, limit, search);
-    
-    return res.status(200).json({
-      status: 'success',
-      data: result.data,
-      meta: result.meta
-    });
-  };
-
-  getProfile = async (req: Request, res: Response) => {
-    const userId = req.user!.sub;
-    const user = await this.usersService.findById(userId);
-    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
-    return res.status(200).json({ status: 'success', data: user });
-  };
-
-  findById = async (req: Request, res: Response) => {
-    const id = req.params.id as string; 
-    const user = await this.usersService.findById(id);
-    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
-    return res.status(200).json({ status: 'success', data: user });
-  };
-
-  update = async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id as string;
-      const user = await this.usersService.update(id, req.body);
-      return res.status(200).json({ status: 'success', data: user });
-    } catch (error) {
-      return res.status(400).json({ status: 'error', message: 'Erro ao atualizar usuário.' });
-    }
-  };
-
-  delete = async (req: Request, res: Response) => {
-    const id = req.params.id as string;
-    await this.usersService.softDelete(id);
-    return res.status(204).send();
-  };
-
-  linkCard = async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id as string;
-      const user = await this.usersService.linkCard(id, req.body.cartaoId);
-      return res.status(200).json({ status: 'success', data: user });
-    } catch (error: any) {
-      if (error.message.startsWith('409:')) {
-        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
-      }
-      throw error;
-    }
-  };
-}
-</file>
-
-<file path="src/modules/users/users.routes.ts">
-import { Router } from 'express';
-import { UsersController } from './users.controller';
-import { authMiddleware } from '../../middlewares/auth.middleware';
-import { roleMiddleware } from '../../middlewares/role.middleware';
-import { validate } from '../../middlewares/validate.middlewares';
-import { 
-  createUserSchema, 
-  updateUserSchema, 
-  linkCardSchema, 
-  listUsersSchema 
-} from '../../schemas/user.schema';
-import { PapelUsuario } from '@prisma/client';
-
-const router = Router();
-const usersController = new UsersController();
-
-// Camada 1: Autenticação obrigatória
-router.use(authMiddleware);
-
-// Rota de Perfil (Isenta de restrição administrativa, ID inferido via token JWT)
-router.get('/me', usersController.getProfile);
-
-// Camada 2: Apenas Gestores e Coordenadores a partir daqui
-const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
-router.use(roleMiddleware(adminRoles));
-
-router.post('/', validate(createUserSchema), usersController.create);
-router.get('/', validate(listUsersSchema), usersController.findAll);
-router.get('/:id', usersController.findById);
-router.put('/:id', validate(updateUserSchema), usersController.update);
-router.delete('/:id', usersController.delete);
-router.patch('/:id/cartao', validate(linkCardSchema), usersController.linkCard);
-
-export { router as usersRouter };
-</file>
-
-<file path="src/modules/users/users.service.ts">
-import { prisma } from '../../lib/prisma';
-import { hashPassword } from '../../utils/hash';
-import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../types/user.types';
-
-const USER_SELECT_FIELDS = {
-  id: true,
-  nome: true,
-  email: true,
-  matricula: true,
-  cartaoId: true,
-  curso: true,
-  papel: true,
-  ativo: true,
-  dataExpiracao: true,
-  turnoId: true,
-  criadoEm: true,
-  atualizadoEm: true,
-};
-
-export class UsersService {
-  async create(data: CreateUsuarioPayload): Promise<UsuarioPublico> {
-    const conflito = await prisma.usuario.findFirst({
-      where: {
-        OR: [
-          { email: data.email },
-          data.matricula ? { matricula: data.matricula } : {},
-        ],
-      },
-    });
-
-    if (conflito) {
-      if (conflito.email === data.email) throw new Error('409:E-mail já está em uso.');
-      if (conflito.matricula === data.matricula) throw new Error('409:Matrícula já está em uso.');
-    }
-
-    const hashSenha = await hashPassword(data.senha);
-
-    return prisma.usuario.create({
-      data: {
-        nome: data.nome,
-        email: data.email,
-        hashSenha,
-        matricula: data.matricula,
-        curso: data.curso,
-        papel: data.papel,
-        turnoId: data.turnoId,
-      },
-      select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico>;
-  }
-
-  async findAll(page: number = 1, limit: number = 10, search?: string) {
-    const skip = (page - 1) * limit;
-
-    const whereClause = search
-      ? {
-          OR: [
-            { nome: { contains: search, mode: 'insensitive' as const } },
-            { email: { contains: search, mode: 'insensitive' as const } },
-            { matricula: { contains: search, mode: 'insensitive' as const } },
-          ],
-        }
-      : {};
-
-    const [total, usuarios] = await Promise.all([
-      prisma.usuario.count({ where: whereClause }),
-      prisma.usuario.findMany({
-        where: whereClause,
-        skip,
-        take: limit,
-        select: USER_SELECT_FIELDS,
-        orderBy: { criadoEm: 'desc' },
-      }),
-    ]);
-
-    return {
-      data: usuarios as UsuarioPublico[],
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-  }
-
-  async findById(id: string): Promise<UsuarioPublico | null> {
-    return prisma.usuario.findUnique({
-      where: { id },
-      select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico | null>;
-  }
-
-  async update(id: string, data: UpdateUsuarioPayload): Promise<UsuarioPublico> {
-    // Desestruturação explícita — garante que apenas campos permitidos chegam ao banco
-    const { nome, email, matricula, curso, papel, turnoId, ativo } = data;
-
-    return prisma.usuario.update({
-      where: { id },
-      data: { nome, email, matricula, curso, papel, turnoId, ativo },
-      select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico>;
-  }
-
-  async softDelete(id: string): Promise<UsuarioPublico> {
-    return prisma.usuario.update({
-      where: { id },
-      data: { ativo: false },
-      select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico>;
-  }
-
-  async linkCard(id: string, cartaoId: string | null): Promise<UsuarioPublico> {
-    if (cartaoId) {
-      const cardExists = await prisma.usuario.findUnique({ where: { cartaoId } });
-      if (cardExists && cardExists.id !== id) {
-        throw new Error('409:Este cartão RFID já está vinculado a outro usuário.');
-      }
-    }
-
-    return prisma.usuario.update({
-      where: { id },
-      data: { cartaoId },
-      select: USER_SELECT_FIELDS,
-    }) as Promise<UsuarioPublico>;
-  }
-}
-</file>
-
-<file path="src/schemas/user.schema.ts">
-import { z } from 'zod';
-import { PapelUsuario } from '@prisma/client';
-
-export const createUserSchema = z.object({
-  body: z.object({
-    nome: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres.'),
-    email: z.string().email('Formato de e-mail inválido.'),
-    senha: z.string().min(6, 'A senha deve ter no mínimo 6 caracteres.'),
-    matricula: z.string().optional(),
-    curso: z.string().optional(),
-    papel: z.nativeEnum(PapelUsuario).default(PapelUsuario.ALUNO),
-    turnoId: z.string().uuid('ID do turno inválido.').optional(),
-  }),
-});
-
-export const updateUserSchema = z.object({
-  body: z.object({
-    nome: z.string().min(3).optional(),
-    email: z.string().email().optional(),
-    matricula: z.string().optional(),
-    curso: z.string().optional(),
-    papel: z.nativeEnum(PapelUsuario).optional(),
-    turnoId: z.string().uuid().optional(),
-    ativo: z.boolean().optional(),
-  }),
-  params: z.object({
-    id: z.string().uuid('ID de usuário inválido.'),
-  }),
-});
-
-export const linkCardSchema = z.object({
-  body: z.object({
-    cartaoId: z.string().min(1, 'O UID do cartão é obrigatório.').nullable(),
-  }),
-  params: z.object({
-    id: z.string().uuid('ID de usuário inválido.'),
-  }),
-});
-
-export const listUsersSchema = z.object({
-  query: z.object({
-    page: z.coerce.number().min(1, 'A página deve ser maior que 0.').default(1),
-    limit: z.coerce.number().min(1).max(100, 'O limite máximo é 100 itens por página.').default(10),
-    search: z.string().optional(),
-  }),
-});
+-- RenameIndex
+ALTER INDEX "idx_usuarios_nome_trgm" RENAME TO "usuarios_nome_idx";
 </file>
 
 <file path=".commitlintrc.json">
@@ -419,158 +296,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-</file>
-
-<file path="prisma/migrations/20260514233015_schema_enterprise_pt_br/migration.sql">
--- CreateEnum
-CREATE TYPE "PapelUsuario" AS ENUM ('ALUNO', 'PROFESSOR', 'FUNCIONARIO', 'COORDENADOR', 'GESTOR', 'VISITANTE');
-
--- CreateEnum
-CREATE TYPE "TipoDispositivo" AS ENUM ('CATRACA', 'LEITOR_CARTAO');
-
--- CreateEnum
-CREATE TYPE "StatusAcesso" AS ENUM ('CONCEDIDO', 'NEGADO');
-
--- CreateEnum
-CREATE TYPE "FinalidadeLog" AS ENUM ('ENTRADA_PREDIO', 'PRESENCA_SALA');
-
--- CreateEnum
-CREATE TYPE "DirecaoAcesso" AS ENUM ('ENTRADA', 'SAIDA');
-
--- CreateEnum
-CREATE TYPE "StatusDispositivo" AS ENUM ('ATIVO', 'INATIVO', 'MANUTENCAO');
-
--- CreateEnum
-CREATE TYPE "TipoToken" AS ENUM ('CHAVE_API', 'REFRESH', 'APP');
-
--- CreateTable
-CREATE TABLE "usuarios" (
-    "id" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "email" TEXT NOT NULL,
-    "hashSenha" TEXT NOT NULL,
-    "matricula" TEXT,
-    "cartaoId" TEXT,
-    "curso" TEXT,
-    "papel" "PapelUsuario" NOT NULL DEFAULT 'ALUNO',
-    "ativo" BOOLEAN NOT NULL DEFAULT true,
-    "dataExpiracao" TIMESTAMP(3),
-    "turnoId" TEXT,
-    "criadoEm" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "atualizadoEm" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "usuarios_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "tokens" (
-    "id" TEXT NOT NULL,
-    "tipo" "TipoToken" NOT NULL,
-    "hash" TEXT NOT NULL,
-    "dataExpiracao" TIMESTAMP(3),
-    "revogado" BOOLEAN NOT NULL DEFAULT false,
-    "usuarioId" TEXT NOT NULL,
-    "criadoEm" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "tokens_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "turnos" (
-    "id" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "horaInicio" INTEGER NOT NULL,
-    "horaFim" INTEGER NOT NULL,
-    "diasSemana" INTEGER[],
-
-    CONSTRAINT "turnos_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "salas" (
-    "id" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "bloco" TEXT,
-
-    CONSTRAINT "salas_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "dispositivos" (
-    "id" TEXT NOT NULL,
-    "nome" TEXT NOT NULL,
-    "tipo" "TipoDispositivo" NOT NULL DEFAULT 'LEITOR_CARTAO',
-    "status" "StatusDispositivo" NOT NULL DEFAULT 'ATIVO',
-    "enderecoMac" TEXT,
-    "hashChaveSeguranca" TEXT,
-    "ipLocal" TEXT,
-    "salaId" TEXT NOT NULL,
-
-    CONSTRAINT "dispositivos_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "logs_acesso" (
-    "id" TEXT NOT NULL,
-    "dataHora" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "status" "StatusAcesso" NOT NULL,
-    "finalidade" "FinalidadeLog" NOT NULL DEFAULT 'ENTRADA_PREDIO',
-    "direcao" "DirecaoAcesso" NOT NULL DEFAULT 'ENTRADA',
-    "motivo" TEXT,
-    "usuarioId" TEXT,
-    "uidCartao" TEXT,
-    "dispositivoId" TEXT NOT NULL,
-
-    CONSTRAINT "logs_acesso_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "usuarios_email_key" ON "usuarios"("email");
-
--- CreateIndex
-CREATE UNIQUE INDEX "usuarios_matricula_key" ON "usuarios"("matricula");
-
--- CreateIndex
-CREATE UNIQUE INDEX "usuarios_cartaoId_key" ON "usuarios"("cartaoId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "tokens_hash_key" ON "tokens"("hash");
-
--- CreateIndex
-CREATE INDEX "tokens_usuarioId_idx" ON "tokens"("usuarioId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "salas_nome_bloco_key" ON "salas"("nome", "bloco");
-
--- CreateIndex
-CREATE UNIQUE INDEX "dispositivos_enderecoMac_key" ON "dispositivos"("enderecoMac");
-
--- CreateIndex
-CREATE INDEX "logs_acesso_dataHora_idx" ON "logs_acesso"("dataHora");
-
--- CreateIndex
-CREATE INDEX "logs_acesso_usuarioId_dataHora_idx" ON "logs_acesso"("usuarioId", "dataHora");
-
--- CreateIndex
-CREATE INDEX "logs_acesso_dispositivoId_dataHora_idx" ON "logs_acesso"("dispositivoId", "dataHora");
-
--- CreateIndex
-CREATE INDEX "logs_acesso_usuarioId_status_idx" ON "logs_acesso"("usuarioId", "status");
-
--- AddForeignKey
-ALTER TABLE "usuarios" ADD CONSTRAINT "usuarios_turnoId_fkey" FOREIGN KEY ("turnoId") REFERENCES "turnos"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "tokens" ADD CONSTRAINT "tokens_usuarioId_fkey" FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "dispositivos" ADD CONSTRAINT "dispositivos_salaId_fkey" FOREIGN KEY ("salaId") REFERENCES "salas"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_usuarioId_fkey" FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_dispositivoId_fkey" FOREIGN KEY ("dispositivoId") REFERENCES "dispositivos"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 </file>
 
 <file path="prisma/migrations/migration_lock.toml">
@@ -1011,14 +736,32 @@ export class AuthController {
       const tokens = await this.authService.login({ email, senhaLimpa: senha });
       return res.status(200).json({ status: 'success', data: tokens });
     } catch (error: any) {
+      if (error.message === 'E-mail não verificado.') {
+        return res.status(403).json({ status: 'error', message: error.message });
+      }
       return res.status(401).json({ status: 'error', message: 'Credenciais inválidas.' });
     }
   };
 
   cadastro = async (req: Request, res: Response) => {
     try {
-      const tokens = await this.authService.cadastro(req.body);
-      return res.status(201).json({ status: 'success', data: tokens });
+      const resultado = await this.authService.cadastro(req.body);
+      return res.status(201).json({ status: 'success', data: resultado });
+    } catch (error: any) {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
+  };
+
+  verificarEmail = async (req: Request, res: Response) => {
+    const { token } = req.query;
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ status: 'error', message: 'Token de verificação ausente ou inválido.' });
+    }
+
+    try {
+      const resultado = await this.authService.verificarEmail(token);
+      return res.status(200).json({ status: 'success', data: resultado });
     } catch (error: any) {
       return res.status(400).json({ status: 'error', message: error.message });
     }
@@ -1064,19 +807,20 @@ const authRateLimiter = rateLimit({
       const [command, ...rest] = args;
       return redis.call(command, ...rest) as any;
     },
-    prefix: 'rl:auth:', 
+    prefix: 'rl:auth:',
   }),
   windowMs: 15 * 60 * 1000,
   limit: 10,
-  message: { status: 'error', message: 'Muitas tentativas de login. Aguarde 15 minutos.' },
+  message: { status: 'error', message: 'Muitas tentativas. Aguarde 15 minutos.' },
   standardHeaders: 'draft-7',
   legacyHeaders: false,
 });
 
-router.post('/login', authRateLimiter, validate(loginSchema), authController.login);
-router.post('/cadastro', authRateLimiter, validate(cadastroSchema), authController.cadastro);
-router.post('/refresh', validate(refreshTokenSchema), authController.refresh);
-router.post('/logout', authMiddleware, authController.logout);
+router.post('/login',          authRateLimiter, validate(loginSchema),        authController.login);
+router.post('/cadastro',       authRateLimiter, validate(cadastroSchema),     authController.cadastro);
+router.get( '/verificar-email',                                                authController.verificarEmail);
+router.post('/refresh',                         validate(refreshTokenSchema), authController.refresh);
+router.post('/logout',         authMiddleware,                                 authController.logout);
 
 export { router as authRouter };
 </file>
@@ -1104,8 +848,11 @@ export class AuthService {
       throw new Error('Credenciais inválidas.');
     }
 
-    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
+    if (!usuario.emailVerificado) {
+      throw new Error('E-mail não verificado.');
+    }
 
+    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
     if (!senhaValida) {
       throw new Error('Credenciais inválidas.');
     }
@@ -1122,12 +869,11 @@ export class AuthService {
           await redis.set(`blacklist:${accessToken}`, 'true', 'EX', tempoRestante);
         }
       }
-    } catch (error) {
-      // Ignorar se o token já estiver inválido/expirado na hora do logout
+    } catch {
     }
   }
 
-  async cadastro(dados: CadastroPayload): Promise<TokenResponse> {
+  async cadastro(dados: CadastroPayload): Promise<{ message: string }> {
     const usuarioExistente = await prisma.usuario.findUnique({
       where: { email: dados.email },
     });
@@ -1138,16 +884,44 @@ export class AuthService {
 
     const senhaHasheada = await hashPassword(dados.senha);
 
-    const novoUsuario = await prisma.usuario.create({
+    const tokenVerificacao = randomBytes(32).toString('hex');
+
+    await prisma.usuario.create({
       data: {
         nome: dados.nome,
         email: dados.email,
         hashSenha: senhaHasheada,
         papel: dados.papel ?? PapelUsuario.ALUNO,
+        emailVerificado: false,
+        tokenVerificacao,
       },
     });
 
-    return this.generateTokens(novoUsuario.id, novoUsuario.papel);
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DEV] Token de verificação para ${dados.email}: ${tokenVerificacao}`);
+    }
+
+    return { message: 'Cadastro realizado. Verifique seu e-mail para ativar a conta.' };
+  }
+
+  async verificarEmail(token: string): Promise<{ message: string }> {
+    const usuario = await prisma.usuario.findUnique({
+      where: { tokenVerificacao: token },
+    });
+
+    if (!usuario) {
+      throw new Error('Token de verificação inválido ou já utilizado.');
+    }
+
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        emailVerificado: true,
+        tokenVerificacao: null,
+      },
+    });
+
+    return { message: 'E-mail verificado com sucesso. Você já pode fazer login.' };
   }
 
   async refreshToken(tokenString: string): Promise<TokenResponse> {
@@ -1200,6 +974,251 @@ export class AuthService {
 }
 </file>
 
+<file path="src/modules/users/users.controller.ts">
+import { Request, Response } from 'express';
+import { UsersService } from './users.service';
+
+export class UsersController {
+  private usersService = new UsersService();
+
+  create = async (req: Request, res: Response) => {
+    try {
+      const user = await this.usersService.create(req.body);
+      return res.status(201).json({ status: 'success', data: user });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) {
+        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+
+  findAll = async (req: Request, res: Response) => {
+    const page = Number(req.query.page);
+    const limit = Number(req.query.limit);
+    const search = req.query.search as string | undefined;
+
+    const result = await this.usersService.findAll(page, limit, search);
+    
+    return res.status(200).json({
+      status: 'success',
+      data: result.data,
+      meta: result.meta
+    });
+  };
+
+  getProfile = async (req: Request, res: Response) => {
+    const userId = req.user!.sub;
+    const user = await this.usersService.findById(userId);
+    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
+    return res.status(200).json({ status: 'success', data: user });
+  };
+
+  findById = async (req: Request, res: Response) => {
+    const id = req.params.id as string; 
+    const user = await this.usersService.findById(id);
+    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
+    return res.status(200).json({ status: 'success', data: user });
+  };
+
+  update = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const user = await this.usersService.update(id, req.body);
+      return res.status(200).json({ status: 'success', data: user });
+    } catch (error) {
+      return res.status(400).json({ status: 'error', message: 'Erro ao atualizar usuário.' });
+    }
+  };
+
+  delete = async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    await this.usersService.softDelete(id);
+    return res.status(204).send();
+  };
+
+  linkCard = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const user = await this.usersService.linkCard(id, req.body.cartaoId);
+      return res.status(200).json({ status: 'success', data: user });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) {
+        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+}
+</file>
+
+<file path="src/modules/users/users.routes.ts">
+import { Router } from 'express';
+import { UsersController } from './users.controller';
+import { authMiddleware } from '../../middlewares/auth.middleware';
+import { roleMiddleware } from '../../middlewares/role.middleware';
+import { validate } from '../../middlewares/validate.middlewares';
+import { 
+  createUserSchema, 
+  updateUserSchema, 
+  linkCardSchema, 
+  listUsersSchema 
+} from '../../schemas/user.schema';
+import { PapelUsuario } from '@prisma/client';
+
+const router = Router();
+const usersController = new UsersController();
+
+// Camada 1: Autenticação obrigatória
+router.use(authMiddleware);
+
+// Rota de Perfil (Isenta de restrição administrativa, ID inferido via token JWT)
+router.get('/me', usersController.getProfile);
+
+// Camada 2: Apenas Gestores e Coordenadores a partir daqui
+const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
+router.use(roleMiddleware(adminRoles));
+
+router.post('/', validate(createUserSchema), usersController.create);
+router.get('/', validate(listUsersSchema), usersController.findAll);
+router.get('/:id', usersController.findById);
+router.put('/:id', validate(updateUserSchema), usersController.update);
+router.delete('/:id', usersController.delete);
+router.patch('/:id/cartao', validate(linkCardSchema), usersController.linkCard);
+
+export { router as usersRouter };
+</file>
+
+<file path="src/modules/users/users.service.ts">
+import { prisma } from '../../lib/prisma';
+import { hashPassword } from '../../utils/hash';
+import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../types/user.types';
+
+// Centraliza os campos de retorno para blindar o sistema contra vazamento do hashSenha
+const USER_SELECT_FIELDS = {
+  id: true,
+  nome: true,
+  email: true,
+  matricula: true,
+  cartaoId: true,
+  curso: true,
+  papel: true,
+  ativo: true,
+  dataExpiracao: true,
+  turnoId: true,
+  criadoEm: true,
+  atualizadoEm: true,
+};
+
+export class UsersService {
+  async create(data: CreateUsuarioPayload): Promise<UsuarioPublico> {
+    const conflito = await prisma.usuario.findFirst({
+      where: {
+        OR: [
+          { email: data.email },
+          data.matricula ? { matricula: data.matricula } : {},
+        ],
+      },
+    });
+
+    if (conflito) {
+      if (conflito.email === data.email) throw new Error('409:E-mail já está em uso.');
+      if (conflito.matricula === data.matricula) throw new Error('409:Matrícula já está em uso.');
+    }
+
+    const hashSenha = await hashPassword(data.senha);
+
+    return prisma.usuario.create({
+      data: {
+        nome: data.nome,
+        email: data.email,
+        hashSenha,
+        matricula: data.matricula,
+        curso: data.curso,
+        papel: data.papel,
+        turnoId: data.turnoId,
+      },
+      select: USER_SELECT_FIELDS,
+    });
+  }
+
+  async findAll(page: number = 1, limit: number = 10, search?: string) {
+    const skip = (page - 1) * limit;
+
+    const whereClause = search
+      ? {
+          OR: [
+            { nome: { contains: search, mode: 'insensitive' as const } },
+            { email: { contains: search, mode: 'insensitive' as const } },
+            { matricula: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {};
+
+    const [total, usuarios] = await Promise.all([
+      prisma.usuario.count({ where: whereClause }),
+      prisma.usuario.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        select: USER_SELECT_FIELDS,
+        orderBy: { criadoEm: 'desc' },
+      }),
+    ]);
+
+    return {
+      data: usuarios as UsuarioPublico[],
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async findById(id: string): Promise<UsuarioPublico | null> {
+    return prisma.usuario.findUnique({
+      where: { id },
+      select: USER_SELECT_FIELDS,
+    });
+  }
+
+  async update(id: string, data: UpdateUsuarioPayload): Promise<UsuarioPublico> {
+    const { ...dadosSeguros } = data;
+    
+    return prisma.usuario.update({
+      where: { id },
+      data: dadosSeguros,
+      select: USER_SELECT_FIELDS,
+    });
+  }
+
+  async softDelete(id: string): Promise<UsuarioPublico> {
+    return prisma.usuario.update({
+      where: { id },
+      data: { ativo: false },
+      select: USER_SELECT_FIELDS,
+    });
+  }
+
+  async linkCard(id: string, cartaoId: string | null): Promise<UsuarioPublico> {
+    if (cartaoId) {
+      const cardExists = await prisma.usuario.findUnique({ where: { cartaoId } });
+      if (cardExists && cardExists.id !== id) {
+        throw new Error('409:Este cartão RFID já está vinculado a outro usuário.');
+      }
+    }
+
+    return prisma.usuario.update({
+      where: { id },
+      data: { cartaoId },
+      select: USER_SELECT_FIELDS,
+    });
+  }
+}
+</file>
+
 <file path="src/schemas/auth.schema.ts">
 import { z } from 'zod';
 import { PapelUsuario } from '@prisma/client';
@@ -1223,6 +1242,55 @@ export const cadastroSchema = z.object({
 export const refreshTokenSchema = z.object({
   body: z.object({
     refreshToken: z.string().min(1, 'Refresh token é obrigatório.'),
+  }),
+});
+</file>
+
+<file path="src/schemas/user.schema.ts">
+import { z } from 'zod';
+import { PapelUsuario } from '@prisma/client';
+
+export const createUserSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres.'),
+    email: z.string().email('Formato de e-mail inválido.'),
+    senha: z.string().min(6, 'A senha deve ter no mínimo 6 caracteres.'),
+    matricula: z.string().optional(),
+    curso: z.string().optional(),
+    papel: z.nativeEnum(PapelUsuario).default(PapelUsuario.ALUNO),
+    turnoId: z.string().uuid('ID do turno inválido.').optional(),
+  }),
+});
+
+export const updateUserSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3).optional(),
+    email: z.string().email().optional(),
+    matricula: z.string().optional(),
+    curso: z.string().optional(),
+    papel: z.nativeEnum(PapelUsuario).optional(),
+    turnoId: z.string().uuid().optional(),
+    ativo: z.boolean().optional(),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('ID de usuário inválido.'),
+  }),
+});
+
+export const linkCardSchema = z.object({
+  body: z.object({
+    cartaoId: z.string().min(1, 'O UID do cartão é obrigatório.').nullable(),
+  }),
+  params: z.object({
+    id: z.string().uuid('ID de usuário inválido.'),
+  }),
+});
+
+export const listUsersSchema = z.object({
+  query: z.object({
+    page: z.coerce.number().min(1, 'A página deve ser maior que 0.').default(1),
+    limit: z.coerce.number().min(1).max(100, 'O limite máximo é 100 itens por página.').default(10),
+    search: z.string().optional(),
   }),
 });
 </file>
@@ -1268,34 +1336,6 @@ export * from './user.types';
 export * from './auth.types';
 export * from './device.types';
 export * from './access-log.types';
-</file>
-
-<file path="src/types/user.types.ts">
-import { PapelUsuario, Usuario } from '@prisma/client';
-
-export type UsuarioDTO = Omit<Usuario, 'id' | 'criadoEm' | 'atualizadoEm' | 'logs' | 'tokens'>;
-
-export type UsuarioPublico = Omit<Usuario, 'hashSenha'>;
-
-export interface CreateUsuarioPayload {
-  nome: string;
-  email: string;
-  senha: string;
-  matricula?: string;
-  curso?: string;
-  papel?: PapelUsuario;
-  turnoId?: string;
-}
-
-export interface UpdateUsuarioPayload {
-  nome?: string;
-  email?: string;
-  matricula?: string;
-  curso?: string;
-  papel?: PapelUsuario;
-  turnoId?: string;
-  ativo?: boolean;
-}
 </file>
 
 <file path="src/utils/device-key.ts">
@@ -1418,6 +1458,383 @@ export default defineConfig({
     url: process.env["DATABASE_URL"],
   },
 });
+</file>
+
+<file path="src/middlewares/auth.middleware.ts">
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { redis } from '../lib/redis';
+import { prisma } from '../lib/prisma';
+import { JwtPayload } from '../types/auth.types';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
+
+export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const isBlacklisted = await redis.get(`blacklist:${token}`);
+    if (isBlacklisted) {
+      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+
+    const usuario = await prisma.usuario.findUnique({
+      where: { id: decoded.sub, ativo: true },
+    });
+
+    if (!usuario) {
+      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
+    }
+
+    req.user = { sub: usuario.id, papel: usuario.papel };
+    return next();
+  } catch (error) {
+    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
+  }
+};
+</file>
+
+<file path="src/middlewares/rate-limit.middleware.ts">
+import { rateLimit } from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
+import { redis } from '../lib/redis';
+
+/**
+ * Limitador de requisições global para evitar ataques de DDoS e Brute Force.
+ * Configurado para 100 requisições por IP a cada 15 minutos.
+ */
+export const globalRateLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: async (...args: string[]) => {
+      const [command, ...rest] = args;
+      return redis.call(command, ...rest) as any;
+    },
+  }),
+  windowMs: 15 * 60 * 1000, // Janela de 15 minutos
+  limit: 100, // Limite de 100 requisições por IP na janela
+  message: {
+    status: 'error',
+    message: 'Muitas requisições originadas deste IP. Por favor, aguarde alguns minutos e tente novamente.',
+  },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+</file>
+
+<file path="src/server.ts">
+import 'dotenv/config';
+import { app } from './app';
+import { prisma } from './lib/prisma';
+
+console.log('[Debug] Iniciando script de ignição...');
+
+const PORT = process.env.PORT || 3333;
+
+async function bootstrap() {
+  try {
+    console.log('[Debug] Tentando conectar ao Banco de Dados...');
+    
+    await prisma.$connect();
+    console.log('Successfully connected to Database via Prisma');
+
+    app.listen(PORT, () => {
+      console.log(`Syngate Backend running on http://localhost:${PORT}`);
+    });
+  } catch (error) {
+    console.error('[Erro Fatal] Falha ao iniciar o servidor:', error);
+    await prisma.$disconnect();
+    process.exit(1);
+  }
+}
+
+bootstrap();
+</file>
+
+<file path="src/types/auth.types.ts">
+import { PapelUsuario } from '@prisma/client';
+
+export interface LoginPayload {
+  email: string;
+  senhaLimpa: string;
+}
+
+export interface CadastroPayload {
+  nome: string;
+  email: string;
+  senha: string;
+  papel?: PapelUsuario;
+}
+
+export interface JwtPayload {
+  sub: string;
+  papel: PapelUsuario;
+}
+
+export interface TokenResponse {
+  accessToken: string;
+  refreshToken?: string;
+}
+</file>
+
+<file path="src/types/user.types.ts">
+import { Usuario, PapelUsuario } from '@prisma/client';
+
+export type UsuarioDTO = Omit<Usuario, 'id' | 'criadoEm' | 'atualizadoEm' | 'logs' | 'tokens'>;
+export type UsuarioPublico = Omit<Usuario, 'hashSenha'>;
+
+export interface CreateUsuarioPayload {
+  nome: string;
+  email: string;
+  senha: string;
+  matricula?: string;
+  curso?: string;
+  papel?: PapelUsuario;
+  turnoId?: string;
+}
+
+export interface UpdateUsuarioPayload {
+  nome?: string;
+  email?: string;
+  matricula?: string;
+  curso?: string;
+  papel?: PapelUsuario;
+  turnoId?: string;
+  ativo?: boolean;
+}
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "Node16",
+    "rootDir": "./",
+    "outDir": "./dist",
+    "moduleResolution": "Node16",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"] 
+  },
+  "include": [
+    "src/**/*", 
+    "prisma.config.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}
+</file>
+
+<file path="prisma/schema.prisma">
+// schema.prisma
+//   - hashSenha (guarda o hash bcrypt/argon2, nunca a senha em texto limpo)
+//   - hashChaveSeguranca (guarda o hash da chave IoT, não o segredo puro)
+//   - diasSemana como Int[] (Array nativo do PostgreSQL, facilita filtros)
+//   - horaInicio / horaFim como Int (minutos desde a meia-noite, ex: 480 = 08:00)
+//   - LogAcesso.usuarioId agora é opcional (permite registrar cartões desconhecidos/visitantes)
+//   - Campo uidCartao no LogAcesso para capturar o UID bruto do RFID
+//   - onDelete: SetNull em vez de Cascade (preserva a trilha de auditoria se o usuário for deletado)
+//   - Sala @@unique([nome, bloco]) para evitar duplicidade
+//   - Índices (@@index) no LogAcesso para buscas super rápidas por data, usuário e dispositivo
+//   - Tabela de Token separada do Usuario para gerenciar múltiplos tipos de tokens
+//   - emailVerificado e tokenVerificacao para prevenção de usuários fantasma
+//   - Índices GIN pg_trgm declarados no schema via extendedIndexes (Prisma 7)
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["extendedIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums (Opções Padronizadas) ────────────────────────────────────────────
+
+enum PapelUsuario {
+  ALUNO
+  PROFESSOR
+  FUNCIONARIO
+  COORDENADOR
+  GESTOR
+  VISITANTE
+}
+
+enum TipoDispositivo {
+  CATRACA
+  LEITOR_CARTAO
+}
+
+enum StatusAcesso {
+  CONCEDIDO
+  NEGADO
+}
+
+enum FinalidadeLog {
+  ENTRADA_PREDIO
+  PRESENCA_SALA
+}
+
+enum DirecaoAcesso {
+  ENTRADA
+  SAIDA
+}
+
+enum StatusDispositivo {
+  ATIVO
+  INATIVO
+  MANUTENCAO
+}
+
+enum TipoToken {
+  CHAVE_API
+  REFRESH
+  APP
+}
+
+// ─── Modelos (Tabelas) ──────────────────────────────────────────────────────
+
+model Usuario {
+  id            String       @id @default(uuid())
+  nome          String
+  email         String       @unique
+
+  /// Hash bcrypt ou argon2 — NUNCA guarde a senha em texto limpo
+  hashSenha     String
+  matricula     String?      @unique
+
+  /// UID do cartão RFID/NFC
+  cartaoId      String?      @unique
+  curso         String?
+  papel         PapelUsuario @default(ALUNO)
+  ativo         Boolean      @default(true)
+
+  /// Validade para alunos, terceirizados ou visitantes
+  dataExpiracao DateTime?
+
+  /// Proteção contra usuários fantasma — conta só pode logar após verificação
+  emailVerificado  Boolean @default(false)
+
+  /// Token de verificação de e-mail — nulo após verificação concluída
+  tokenVerificacao String? @unique
+
+  // Relacionamento com Turno
+  turnoId       String?
+  turno         Turno?       @relation(fields: [turnoId], references: [id])
+
+  tokens        Token[]
+  logs          LogAcesso[]
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  // Índices GIN para buscas ILIKE performáticas (pg_trgm)
+  @@index([nome(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin)
+
+  @@map("usuarios")
+}
+
+model Token {
+  id            String    @id @default(uuid())
+  tipo          TipoToken
+
+  /// Guarde apenas o hash SHA-256 do valor real do token
+  hash          String    @unique
+  dataExpiracao DateTime?
+  revogado      Boolean   @default(false)
+
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  criadoEm  DateTime @default(now())
+
+  @@index([usuarioId])
+  @@map("tokens")
+}
+
+model Turno {
+  id   String @id @default(uuid())
+  nome String // Ex: "Manhã", "Tarde", "Noite"
+
+  /// Minutos desde a meia-noite — ex: 480 = 08:00, 720 = 12:00
+  horaInicio Int
+  horaFim    Int
+
+  /// Array de inteiros do PostgreSQL — ex: [1,2,3,4,5] = Seg–Sex
+  diasSemana Int[]
+
+  usuarios Usuario[]
+
+  @@map("turnos")
+}
+
+model Sala {
+  id    String  @id @default(uuid())
+  nome  String
+  bloco String?
+
+  dispositivos Dispositivo[]
+
+  @@unique([nome, bloco]) // Impede criar duas "Sala 101" no "Bloco A"
+  @@map("salas")
+}
+
+model Dispositivo {
+  id     String            @id @default(uuid())
+  nome   String
+  tipo   TipoDispositivo   @default(LEITOR_CARTAO)
+  status StatusDispositivo @default(ATIVO)
+
+  /// Endereço MAC físico do ESP32 — formato: AA:BB:CC:DD:EE:FF
+  enderecoMac String? @unique
+
+  /// Hash SHA-256 da chave secreta que o dispositivo usa para se autenticar
+  hashChaveSeguranca String?
+  ipLocal            String?
+
+  salaId String
+  sala   Sala   @relation(fields: [salaId], references: [id])
+
+  logs LogAcesso[]
+
+  @@map("dispositivos")
+}
+
+model LogAcesso {
+  id         String        @id @default(uuid())
+  dataHora   DateTime      @default(now())
+  status     StatusAcesso
+  finalidade FinalidadeLog @default(ENTRADA_PREDIO)
+  direcao    DirecaoAcesso @default(ENTRADA)
+
+  /// Ex: "Turno inválido", "Cartão expirado", "Cartão desconhecido: A1B2C3D4"
+  motivo String?
+
+  /// Nulo quando o UID do cartão não está registrado no sistema
+  usuarioId String?
+  usuario   Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  /// UID bruto do RFID lido pelo dispositivo — sempre registrado, mesmo sem usuário
+  uidCartao String?
+
+  dispositivoId String
+  dispositivo   Dispositivo @relation(fields: [dispositivoId], references: [id], onDelete: Cascade)
+
+  @@index([dataHora])
+  @@index([usuarioId, dataHora])
+  @@index([dispositivoId, dataHora])
+  @@index([usuarioId, status])
+
+  @@map("logs_acesso")
+}
 </file>
 
 <file path="src/config/swagger.ts">
@@ -1893,344 +2310,6 @@ export const openapiSpecification = {
 };
 </file>
 
-<file path="src/middlewares/auth.middleware.ts">
-import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { redis } from '../lib/redis';
-import { prisma } from '../lib/prisma';
-import { JwtPayload } from '../types/auth.types';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
-
-export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
-  }
-
-  const token = authHeader.split(' ')[1];
-
-  try {
-    const isBlacklisted = await redis.get(`blacklist:${token}`);
-    if (isBlacklisted) {
-      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
-    }
-
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-
-    const usuario = await prisma.usuario.findUnique({
-      where: { id: decoded.sub, ativo: true },
-    });
-
-    if (!usuario) {
-      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
-    }
-
-    req.user = { sub: usuario.id, papel: usuario.papel };
-    return next();
-  } catch (error) {
-    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
-  }
-};
-</file>
-
-<file path="src/middlewares/rate-limit.middleware.ts">
-import { rateLimit } from 'express-rate-limit';
-import { RedisStore } from 'rate-limit-redis';
-import { redis } from '../lib/redis';
-
-/**
- * Limitador de requisições global para evitar ataques de DDoS e Brute Force.
- * Configurado para 100 requisições por IP a cada 15 minutos.
- */
-export const globalRateLimiter = rateLimit({
-  store: new RedisStore({
-    sendCommand: async (...args: string[]) => {
-      const [command, ...rest] = args;
-      return redis.call(command, ...rest) as any;
-    },
-  }),
-  windowMs: 15 * 60 * 1000, // Janela de 15 minutos
-  limit: 100, // Limite de 100 requisições por IP na janela
-  message: {
-    status: 'error',
-    message: 'Muitas requisições originadas deste IP. Por favor, aguarde alguns minutos e tente novamente.',
-  },
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-});
-</file>
-
-<file path="src/server.ts">
-import 'dotenv/config';
-import { app } from './app';
-import { prisma } from './lib/prisma';
-
-console.log('[Debug] Iniciando script de ignição...');
-
-const PORT = process.env.PORT || 3333;
-
-async function bootstrap() {
-  try {
-    console.log('[Debug] Tentando conectar ao Banco de Dados...');
-    
-    await prisma.$connect();
-    console.log('Successfully connected to Database via Prisma');
-
-    app.listen(PORT, () => {
-      console.log(`Syngate Backend running on http://localhost:${PORT}`);
-    });
-  } catch (error) {
-    console.error('[Erro Fatal] Falha ao iniciar o servidor:', error);
-    await prisma.$disconnect();
-    process.exit(1);
-  }
-}
-
-bootstrap();
-</file>
-
-<file path="src/types/auth.types.ts">
-import { PapelUsuario } from '@prisma/client';
-
-export interface LoginPayload {
-  email: string;
-  senhaLimpa: string;
-}
-
-export interface CadastroPayload {
-  nome: string;
-  email: string;
-  senha: string;
-  papel?: PapelUsuario;
-}
-
-export interface JwtPayload {
-  sub: string;
-  papel: PapelUsuario;
-}
-
-export interface TokenResponse {
-  accessToken: string;
-  refreshToken?: string;
-}
-</file>
-
-<file path="tsconfig.json">
-{
-  "compilerOptions": {
-    "target": "es2022",
-    "module": "Node16",
-    "rootDir": "./",
-    "outDir": "./dist",
-    "moduleResolution": "Node16",
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "strict": true,
-    "skipLibCheck": true,
-    "types": ["node"] 
-  },
-  "include": [
-    "src/**/*", 
-    "prisma.config.ts"
-  ],
-  "exclude": ["node_modules", "dist"]
-}
-</file>
-
-<file path="prisma/schema.prisma">
-// schema.prisma
-//   - hashSenha (guarda o hash bcrypt/argon2, nunca a senha em texto limpo)
-//   - hashChaveSeguranca (guarda o hash da chave IoT, não o segredo puro)
-//   - diasSemana como Int[] (Array nativo do PostgreSQL, facilita filtros)
-//   - horaInicio / horaFim como Int (minutos desde a meia-noite, ex: 480 = 08:00)
-//   - LogAcesso.usuarioId agora é opcional (permite registrar cartões desconhecidos/visitantes)
-//   - Campo uidCartao no LogAcesso para capturar o UID bruto do RFID
-//   - onDelete: SetNull em vez de Cascade (preserva a trilha de auditoria se o usuário for deletado)
-//   - Sala @@unique([nome, bloco]) para evitar duplicidade
-//   - Índices (@@index) no LogAcesso para buscas super rápidas por data, usuário e dispositivo
-//   - Tabela de Token separada do Usuario para gerenciar múltiplos tipos de tokens
-
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "postgresql"
-}
-
-// ─── Enums (Opções Padronizadas) ────────────────────────────────────────────
-
-enum PapelUsuario {
-  ALUNO
-  PROFESSOR
-  FUNCIONARIO
-  COORDENADOR
-  GESTOR
-  VISITANTE
-}
-
-enum TipoDispositivo {
-  CATRACA
-  LEITOR_CARTAO
-}
-
-enum StatusAcesso {
-  CONCEDIDO
-  NEGADO
-}
-
-enum FinalidadeLog {
-  ENTRADA_PREDIO
-  PRESENCA_SALA
-}
-
-enum DirecaoAcesso {
-  ENTRADA
-  SAIDA
-}
-
-enum StatusDispositivo {
-  ATIVO
-  INATIVO
-  MANUTENCAO
-}
-
-enum TipoToken {
-  CHAVE_API
-  REFRESH
-  APP
-}
-
-// ─── Modelos (Tabelas) ──────────────────────────────────────────────────────
-
-model Usuario {
-  id             String       @id @default(uuid())
-  nome           String
-  email          String       @unique
-  
-  /// Hash bcrypt ou argon2 — NUNCA guarde a senha em texto limpo
-  hashSenha      String
-  matricula      String?      @unique
-  
-  /// UID do cartão RFID/NFC
-  cartaoId       String?      @unique
-  curso          String?
-  papel          PapelUsuario @default(ALUNO)
-  ativo          Boolean      @default(true)
-  
-  /// Validade para alunos, terceirizados ou visitantes
-  dataExpiracao  DateTime?
-
-  // Relacionamento com Turno
-  turnoId        String?
-  turno          Turno?       @relation(fields: [turnoId], references: [id])
-
-  tokens         Token[]
-  logs           LogAcesso[]
-
-  criadoEm       DateTime     @default(now())
-  atualizadoEm   DateTime     @updatedAt
-
-  @@map("usuarios")
-}
-
-model Token {
-  id           String    @id @default(uuid())
-  tipo         TipoToken
-  
-  /// Guarde apenas o hash SHA-256 do valor real do token
-  hash         String    @unique
-  dataExpiracao DateTime?
-  revogado     Boolean   @default(false)
-  
-  usuarioId    String
-  usuario      Usuario   @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-  criadoEm     DateTime  @default(now())
-
-  @@index([usuarioId])
-  @@map("tokens")
-}
-
-model Turno {
-  id           String    @id @default(uuid())
-  nome         String    // Ex: "Manhã", "Tarde", "Noite"
-  
-  /// Minutos desde a meia-noite — ex: 480 = 08:00, 720 = 12:00
-  horaInicio   Int
-  horaFim      Int
-  
-  /// Array de inteiros do PostgreSQL — ex: [1,2,3,4,5] = Seg–Sex
-  diasSemana   Int[]
-
-  usuarios     Usuario[]
-
-  @@map("turnos")
-}
-
-model Sala {
-  id           String        @id @default(uuid())
-  nome         String
-  bloco        String?
-
-  dispositivos Dispositivo[]
-
-  @@unique([nome, bloco]) // Impede criar duas "Sala 101" no "Bloco A"
-  @@map("salas")
-}
-
-model Dispositivo {
-  id                 String            @id @default(uuid())
-  nome               String
-  tipo               TipoDispositivo   @default(LEITOR_CARTAO)
-  status             StatusDispositivo @default(ATIVO)
-
-  /// Endereço MAC físico do ESP32 — formato: AA:BB:CC:DD:EE:FF
-  enderecoMac        String?           @unique
-  
-  /// Hash SHA-256 da chave secreta que o dispositivo usa para se autenticar
-  hashChaveSeguranca String?
-  ipLocal            String?
-
-  salaId             String
-  sala               Sala              @relation(fields: [salaId], references: [id])
-
-  logs               LogAcesso[]
-
-  @@map("dispositivos")
-}
-
-model LogAcesso {
-  id            String        @id @default(uuid())
-  dataHora      DateTime      @default(now())
-  status        StatusAcesso
-  finalidade    FinalidadeLog @default(ENTRADA_PREDIO)
-  direcao       DirecaoAcesso @default(ENTRADA)
-  
-  /// Ex: "Turno inválido", "Cartão expirado", "Cartão desconhecido: A1B2C3D4"
-  motivo        String?
-
-  /// Nulo quando o UID do cartão não está registrado no sistema
-  usuarioId     String?
-  usuario       Usuario?      @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
-
-  /// UID bruto do RFID lido pelo dispositivo — sempre registrado, mesmo sem usuário
-  uidCartao     String?
-
-  dispositivoId String
-  dispositivo   Dispositivo   @relation(fields: [dispositivoId], references: [id], onDelete: Cascade)
-
-  // Índices para otimizar relatórios e buscas do Gestor
-  @@index([dataHora])
-  @@index([usuarioId, dataHora])
-  @@index([dispositivoId, dataHora])
-  @@index([usuarioId, status])
-  
-  @@map("logs_acesso")
-}
-</file>
-
 <file path="package.json">
 {
   "name": "syngate-backend",
@@ -2340,6 +2419,7 @@ const logger = pinoHttp({
   },
 });
 
+// --- Middlewares de Segurança e Parse ---
 app.use(logger);
 app.use(
   helmet({
@@ -2359,10 +2439,12 @@ app.use(cors({
 
 app.use(express.json());
 
+// --- Rotas de Infraestrutura (Isentas de Rate Limit) ---
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'syngate-backend' });
 });
 
+// 🔒 Proteção Estratégica: A documentação só existe fora do ambiente de produção
 if (process.env.NODE_ENV !== 'production') {
   app.use('/swagger', swaggerUi.serve, swaggerUi.setup(openapiSpecification));
   app.get('/docs', (req, res) => {
@@ -2370,11 +2452,14 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
+// --- Barreira de Proteção contra Força Bruta e DDoS ---
 app.use(globalRateLimiter);
 
+// --- Roteadores da API ---
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/users', usersRouter);
 
+// --- Middleware de Tratamento Global de Erros ---
 app.use(errorHandler);
 
 export { app };
