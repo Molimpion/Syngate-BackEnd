@@ -35,12 +35,11 @@ export class ShiftsController {
   update = async (req: Request, res: Response) => {
     try {
       const id = req.params.id as string;
-      
       const shift = await this.shiftsService.update(id, req.body);
       return res.status(200).json({ status: 'success', data: shift });
     } catch (error: any) {
-      if (error.code === 'P2025') {
-        return res.status(404).json({ status: 'error', message: 'Turno não encontrado.' });
+      if (error.message.startsWith('404:')) {
+        return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
       }
       throw error;
     }
@@ -49,18 +48,14 @@ export class ShiftsController {
   delete = async (req: Request, res: Response) => {
     try {
       const id = req.params.id as string;
-      
       await this.shiftsService.delete(id);
       return res.status(204).send();
     } catch (error: any) {
-      if (error.code === 'P2003') {
-        return res.status(400).json({ 
-          status: 'error', 
-          message: 'Não é possível excluir este turno pois existem usuários vinculados a ele.' 
-        });
+      if (error.message.startsWith('400:')) {
+        return res.status(400).json({ status: 'error', message: error.message.split(':')[1] });
       }
-      if (error.code === 'P2025') {
-        return res.status(404).json({ status: 'error', message: 'Turno não encontrado.' });
+      if (error.message.startsWith('404:')) {
+        return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
       }
       throw error;
     }
