@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { UsersController } from './users.controller';
-import { authMiddleware } from '../../middlewares/auth.middleware';
-import { roleMiddleware } from '../../middlewares/role.middleware';
-import { validate } from '../../middlewares/validate.middlewares';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
+import { roleMiddleware } from '../../shared/middlewares/role.middleware';
+import { validate } from '../../shared/middlewares/validate.middlewares';
 import { 
   createUserSchema, 
   updateUserSchema, 

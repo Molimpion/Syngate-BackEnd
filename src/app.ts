@@ -4,11 +4,10 @@ import cors from 'cors';
 import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import swaggerUi from 'swagger-ui-express';
-
 import { openapiSpecification } from './config/swagger';
 import { renderScalar } from './config/scalar-config';
-import { globalRateLimiter } from './middlewares/rate-limit.middleware';
-import { errorHandler } from './middlewares/error.middleware';
+import { globalRateLimiter } from './shared/middlewares/rate-limit.middleware';
+import { errorHandler } from './shared/middlewares/error.middleware';
 import { authRouter } from './modules/auth/auth.routes';
 import { usersRouter } from './modules/users/users.routes';
 

@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma';
-import { hashPassword } from '../../utils/hash';
-import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../types/user.types';
+import { hashPassword } from '../../shared/utils/hash';
+import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../shared/types/user.types';
 
 const USER_SELECT_FIELDS = {
   id: true,

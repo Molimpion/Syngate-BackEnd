@@ -59,11 +59,6 @@ src/config/scalar-config.ts
 src/config/swagger.ts
 src/lib/prisma.ts
 src/lib/redis.ts
-src/middlewares/auth.middleware.ts
-src/middlewares/error.middleware.ts
-src/middlewares/rate-limit.middleware.ts
-src/middlewares/role.middleware.ts
-src/middlewares/validate.middlewares.ts
 src/modules/auth/auth.controller.ts
 src/modules/auth/auth.routes.ts
 src/modules/auth/auth.service.ts
@@ -73,20 +68,366 @@ src/modules/users/users.service.ts
 src/schemas/auth.schema.ts
 src/schemas/user.schema.ts
 src/server.ts
-src/types/access-log.types.ts
-src/types/auth.types.ts
-src/types/device.types.ts
-src/types/express.d.ts
-src/types/index.ts
-src/types/user.types.ts
-src/utils/device-key.ts
-src/utils/hash.ts
-src/utils/shift-validator.ts
+src/shared/middlewares/auth.middleware.ts
+src/shared/middlewares/error.middleware.ts
+src/shared/middlewares/rate-limit.middleware.ts
+src/shared/middlewares/role.middleware.ts
+src/shared/middlewares/validate.middlewares.ts
+src/shared/types/access-log.types.ts
+src/shared/types/auth.types.ts
+src/shared/types/device.types.ts
+src/shared/types/express.d.ts
+src/shared/types/index.ts
+src/shared/types/user.types.ts
+src/shared/utils/device-key.ts
+src/shared/utils/hash.ts
+src/shared/utils/shift-validator.ts
 tsconfig.json
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="src/shared/middlewares/auth.middleware.ts">
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { redis } from '../lib/redis';
+import { prisma } from '../lib/prisma';
+import { JwtPayload } from '../shared/types/auth.types';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
+
+export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const isBlacklisted = await redis.get(`blacklist:${token}`);
+    if (isBlacklisted) {
+      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+
+    const usuario = await prisma.usuario.findUnique({
+      where: { id: decoded.sub, ativo: true },
+    });
+
+    if (!usuario) {
+      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
+    }
+
+    req.user = { sub: usuario.id, papel: usuario.papel };
+    return next();
+  } catch (error) {
+    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
+  }
+};
+</file>
+
+<file path="src/shared/middlewares/error.middleware.ts">
+import { Request, Response, NextFunction } from 'express';
+
+export const errorHandler = (
+  err: Error,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  if (req.log) {
+    req.log.error({ err, msg: err.message });
+  } else {
+    console.error('[Unhandled Error]', err);
+  }
+
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  return res.status(500).json({
+    status: 'error',
+    message: 'Erro interno do servidor.',
+    ...( !isProduction && { details: err.message, stack: err.stack } )
+  });
+};
+</file>
+
+<file path="src/shared/middlewares/rate-limit.middleware.ts">
+import { rateLimit } from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
+import { redis } from '../lib/redis';
+
+export const globalRateLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: async (...args: string[]) => {
+      const [command, ...rest] = args;
+      return redis.call(command, ...rest) as any;
+    },
+  }),
+  windowMs: 15 * 60 * 1000,
+  limit: 100,
+  message: {
+    status: 'error',
+    message: 'Muitas requisições originadas deste IP. Por favor, aguarde alguns minutos e tente novamente.',
+  },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+</file>
+
+<file path="src/shared/middlewares/role.middleware.ts">
+import { Request, Response, NextFunction } from 'express';
+import { PapelUsuario } from '@prisma/client';
+
+export const roleMiddleware = (papeisPermitidos: PapelUsuario[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ status: 'error', message: 'Usuário não autenticado.' });
+    }
+
+    if (!papeisPermitidos.includes(req.user.papel)) {
+      return res.status(403).json({ status: 'error', message: 'Acesso negado. Privilégios insuficientes.' });
+    }
+
+    return next();
+  };
+};
+</file>
+
+<file path="src/shared/middlewares/validate.middlewares.ts">
+import { Request, Response, NextFunction } from 'express';
+import { AnyZodObject, ZodError } from 'zod';
+
+export const validate = (schema: AnyZodObject) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await schema.parseAsync({
+        body: req.body,
+        query: req.query,
+        params: req.params,
+      });
+      return next();
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const formattedErrors = error.errors.map((err) => ({
+          campo: err.path.join('.'),
+          mensagem: err.message,
+        }));
+        
+        return res.status(400).json({
+          status: 'error',
+          message: 'Erro de validação nos dados fornecidos.',
+          errors: formattedErrors,
+        });
+      }
+      return next(error);
+    }
+  };
+};
+</file>
+
+<file path="src/shared/types/access-log.types.ts">
+import { LogAcesso } from '@prisma/client';
+
+export type LogAcessoDTO = Omit<LogAcesso, 'id'>;
+
+export interface AccessResult {
+  granted: boolean;
+  reason: string;
+}
+</file>
+
+<file path="src/shared/types/auth.types.ts">
+import { PapelUsuario } from '@prisma/client';
+
+export interface LoginPayload {
+  email: string;
+  senhaLimpa: string;
+}
+
+export interface CadastroPayload {
+  nome: string;
+  email: string;
+  senha: string;
+  papel?: PapelUsuario;
+}
+
+export interface JwtPayload {
+  sub: string;
+  papel: PapelUsuario;
+}
+
+export interface TokenResponse {
+  accessToken: string;
+  refreshToken?: string;
+}
+</file>
+
+<file path="src/shared/types/device.types.ts">
+import { Dispositivo } from '@prisma/client';
+
+export type DispositivoDTO = Omit<Dispositivo, 'id' | 'logs'>;
+
+export interface DeviceAuthHeader {
+  'x-device-id': string;
+  'x-device-secret': string;
+}
+</file>
+
+<file path="src/shared/types/express.d.ts">
+import { JwtPayload } from './auth.types';
+import { Dispositivo } from '@prisma/client';
+
+declare global {
+  namespace Express {
+    export interface Request {
+      user?: JwtPayload;
+      device?: Dispositivo;
+    }
+  }
+}
+</file>
+
+<file path="src/shared/types/index.ts">
+export * from './user.types';
+export * from './auth.types';
+export * from './device.types';
+export * from './access-log.types';
+</file>
+
+<file path="src/shared/types/user.types.ts">
+import { Usuario, PapelUsuario } from '@prisma/client';
+
+export type UsuarioDTO = Omit<Usuario, 'id' | 'criadoEm' | 'atualizadoEm' | 'logs' | 'tokens'>;
+export type UsuarioPublico = Omit<Usuario, 'hashSenha' | 'tokenVerificacao'>;
+export interface CreateUsuarioPayload {
+  nome: string;
+  email: string;
+  senha: string;
+  matricula?: string;
+  curso?: string;
+  papel?: PapelUsuario;
+  turnoId?: string;
+}
+
+export interface UpdateUsuarioPayload {
+  nome?: string;
+  email?: string;
+  matricula?: string;
+  curso?: string;
+  papel?: PapelUsuario;
+  turnoId?: string;
+  ativo?: boolean;
+}
+</file>
+
+<file path="src/shared/utils/device-key.ts">
+import crypto from 'crypto';
+
+export function generateDeviceKey(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+export function hashDeviceKey(key: string): string {
+  return crypto.createHash('sha256').update(key).digest('hex');
+}
+</file>
+
+<file path="src/shared/utils/hash.ts">
+import bcrypt from 'bcrypt';
+
+const SALT_ROUNDS = process.env.NODE_ENV === 'test' ? 4 : 12;
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = await bcrypt.genSalt(SALT_ROUNDS);
+  return bcrypt.hash(password, salt);
+}
+
+export async function comparePassword(password: string, hash: string): Promise<boolean> {
+  return bcrypt.compare(password, hash);
+}
+</file>
+
+<file path="src/shared/utils/shift-validator.ts">
+import { Turno } from '@prisma/client';
+
+/**
+ * Convenção de dias da semana: padrão nativo JavaScript (Date.getDay())
+ * 0 = Domingo, 1 = Segunda, 2 = Terça, 3 = Quarta,
+ * 4 = Quinta, 5 = Sexta, 6 = Sábado
+ */
+
+/**
+ * Converte um objeto Date para minutos desde a meia-noite no fuso horário local do servidor.
+ */
+export function dateToMinutes(date: Date): number {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+/**
+ * Retorna o dia da semana no padrão nativo JS (0-6, onde 0 = Domingo).
+ */
+export function getDayOfWeek(date: Date): number {
+  return date.getDay();
+}
+
+/**
+ * Verifica se um determinado momento está dentro da janela do turno
+ * e se o dia da semana atual é permitido.
+ */
+export function isWithinShift(date: Date, turno: Turno): boolean {
+  const currentDay = getDayOfWeek(date);
+
+  if (!turno.diasSemana.includes(currentDay)) {
+    return false;
+  }
+
+  const currentMinutes = dateToMinutes(date);
+
+  // Tratamento para turnos noturnos que atravessam a meia-noite (ex: 22:00 às 06:00)
+  if (turno.horaInicio > turno.horaFim) {
+    return currentMinutes >= turno.horaInicio || currentMinutes <= turno.horaFim;
+  }
+
+  // Turno diurno padrão (ex: 08:00 às 18:00)
+  return currentMinutes >= turno.horaInicio && currentMinutes <= turno.horaFim;
+}
+</file>
+
+<file path=".commitlintrc.json">
+{ "extends": ["@commitlint/config-conventional"] }
+</file>
+
+<file path=".husky/commit-msg">
+npx --no -- commitlint --edit "$1"
+</file>
+
+<file path="LICENSE">
+MIT License
+
+Copyright (c) 2026 Manoel Olímpio
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</file>
 
 <file path="prisma/migrations/20260524180949_initial_schema/migration.sql">
 -- Migration: initial_schema
@@ -266,296 +607,10 @@ ALTER INDEX "idx_usuarios_email_trgm" RENAME TO "usuarios_email_idx";
 ALTER INDEX "idx_usuarios_nome_trgm" RENAME TO "usuarios_nome_idx";
 </file>
 
-<file path=".commitlintrc.json">
-{ "extends": ["@commitlint/config-conventional"] }
-</file>
-
-<file path=".husky/commit-msg">
-npx --no -- commitlint --edit "$1"
-</file>
-
-<file path="LICENSE">
-MIT License
-
-Copyright (c) 2026 Manoel Olímpio
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-</file>
-
 <file path="prisma/migrations/migration_lock.toml">
 # Please do not edit this file manually
 # It should be added in your version-control system (e.g., Git)
 provider = "postgresql"
-</file>
-
-<file path="prisma/seed.ts">
-import { 
-  PrismaClient, 
-  PapelUsuario, 
-  TipoDispositivo, 
-  StatusAcesso, 
-  FinalidadeLog, 
-  DirecaoAcesso 
-} from '@prisma/client';
-import { hashPassword } from '../src/utils/hash';
-import { hashDeviceKey } from '../src/utils/device-key';
-
-const prisma = new PrismaClient();
-
-async function main() {
-  console.log('🌱 Iniciando expansão de dados do Seed com horários granulares...');
-
-  // ---------------------------------------------------------
-  // 1. TURNOS (Especificados com precisão matemática em minutos)
-  // ---------------------------------------------------------
-  console.log('⏳ Criando Turnos de Alunos...');
-  const turnoAlunoManha = await prisma.turno.upsert({
-    where: { id: 'aluno-manha' },
-    update: {}, create: { id: 'aluno-manha', nome: 'Aluno - Manhã', horaInicio: 480, horaFim: 720, diasSemana: [1, 2, 3, 4, 5] }, // 08:00 às 12:00
-  });
-  const turnoAlunoTarde = await prisma.turno.upsert({
-    where: { id: 'aluno-tarde' },
-    update: {}, create: { id: 'aluno-tarde', nome: 'Aluno - Tarde', horaInicio: 780, horaFim: 1020, diasSemana: [1, 2, 3, 4, 5] }, // 13:00 às 17:00
-  });
-  const turnoAlunoNoite = await prisma.turno.upsert({
-    where: { id: 'aluno-noite' },
-    update: {}, create: { id: 'aluno-noite', nome: 'Aluno - Noite', horaInicio: 1080, horaFim: 1320, diasSemana: [1, 2, 3, 4, 5] }, // 18:00 às 22:00
-  });
-
-  console.log('⏳ Criando Turnos de Professores (com margem de 30min)...');
-  const turnoProfManha = await prisma.turno.upsert({
-    where: { id: 'prof-manha' },
-    update: {}, create: { id: 'prof-manha', nome: 'Professor - Manhã', horaInicio: 450, horaFim: 750, diasSemana: [1, 2, 3, 4, 5] }, // 07:30 às 12:30
-  });
-  const turnoProfNoite = await prisma.turno.upsert({
-    where: { id: 'prof-noite' },
-    update: {}, create: { id: 'prof-noite', nome: 'Professor - Noite', horaInicio: 1050, horaFim: 1350, diasSemana: [1, 2, 3, 4, 5] }, // 17:30 às 22:30
-  });
-
-  console.log('⏳ Criando Turnos de Staff e Gestão...');
-  const turnoComercial = await prisma.turno.upsert({
-    where: { id: 'staff-comercial' },
-    update: {}, create: { id: 'staff-comercial', nome: 'Funcionário - Comercial', horaInicio: 420, horaFim: 1080, diasSemana: [1, 2, 3, 4, 5] }, // 07:00 às 18:00
-  });
-  const turnoIntegral = await prisma.turno.upsert({
-    where: { id: 'gestao-integral' },
-    update: {}, create: { id: 'gestao-integral', nome: 'Gestor - Integral', horaInicio: 360, horaFim: 1439, diasSemana: [1, 2, 3, 4, 5, 6] }, // 06:00 às 23:59
-  });
-
-  // ---------------------------------------------------------
-  // 2. SALAS
-  // ---------------------------------------------------------
-  console.log('🏢 Criando Salas...');
-  const portaria = await prisma.sala.upsert({
-    where: { nome_bloco: { nome: 'Portaria Principal', bloco: 'Entrada' } },
-    update: {}, create: { nome: 'Portaria Principal', bloco: 'Entrada' },
-  });
-
-  const lab101 = await prisma.sala.upsert({
-    where: { nome_bloco: { nome: 'Laboratório 101', bloco: 'A' } },
-    update: {}, create: { nome: 'Laboratório 101', bloco: 'A' },
-  });
-
-  // ---------------------------------------------------------
-  // 3. DISPOSITIVOS (IoT)
-  // ---------------------------------------------------------
-  console.log('🔌 Criando Dispositivos IoT...');
-  const fakeDeviceSecret = 'super-secret-key-123'; // Simula a chave gravada no firmware C++ do ESP32
-  const hashedDeviceKey = hashDeviceKey(fakeDeviceSecret);
-
-  const catracaEntrada = await prisma.dispositivo.upsert({
-    where: { enderecoMac: 'AA:BB:CC:DD:EE:01' },
-    update: {},
-    create: {
-      nome: 'Catraca Principal',
-      tipo: TipoDispositivo.CATRACA,
-      enderecoMac: 'AA:BB:CC:DD:EE:01',
-      hashChaveSeguranca: hashedDeviceKey,
-      salaId: portaria.id,
-      ipLocal: '192.168.1.100',
-    },
-  });
-
-  const leitorLab = await prisma.dispositivo.upsert({
-    where: { enderecoMac: 'AA:BB:CC:DD:EE:02' },
-    update: {},
-    create: {
-      nome: 'Leitor Lab 101',
-      tipo: TipoDispositivo.LEITOR_CARTAO,
-      enderecoMac: 'AA:BB:CC:DD:EE:02',
-      hashChaveSeguranca: hashedDeviceKey,
-      salaId: lab101.id,
-      ipLocal: '192.168.1.101',
-    },
-  });
-
-  // ---------------------------------------------------------
-  // 4. USUÁRIOS
-  // ---------------------------------------------------------
-  console.log('👥 Criando Usuários (Gestor, Recepcionista, Professor, Aluno)...');
-  const defaultPassword = await hashPassword('Senha@123');
-
-  const gestor = await prisma.usuario.upsert({
-    where: { email: 'admin@syngate.com' },
-    update: {},
-    create: {
-      nome: 'Administrador do Sistema',
-      email: 'admin@syngate.com',
-      hashSenha: defaultPassword,
-      papel: PapelUsuario.GESTOR,
-      turnoId: turnoIntegral.id,
-      matricula: 'ADM001',
-    },
-  });
-
-  const funcionario = await prisma.usuario.upsert({
-    where: { email: 'recepcao@syngate.com' },
-    update: {},
-    create: {
-      nome: 'Maria Recepção',
-      email: 'recepcao@syngate.com',
-      hashSenha: defaultPassword,
-      papel: PapelUsuario.FUNCIONARIO,
-      turnoId: turnoComercial.id,
-      matricula: 'FUN100',
-      cartaoId: 'RFID-FUN-001',
-    },
-  });
-
-  const professor = await prisma.usuario.upsert({
-    where: { email: 'professor.manha@syngate.com' },
-    update: {},
-    create: {
-      nome: 'Professor Carlos (Matutino)',
-      email: 'professor.manha@syngate.com',
-      hashSenha: defaultPassword,
-      papel: PapelUsuario.PROFESSOR,
-      turnoId: turnoProfManha.id,
-      matricula: 'PRF2026',
-      cartaoId: 'RFID-PROF-001',
-      curso: 'Sistemas de Informação',
-    },
-  });
-
-  const aluno = await prisma.usuario.upsert({
-    where: { email: 'aluno.manha@syngate.com' },
-    update: {},
-    create: {
-      nome: 'João Estudante (Matutino)',
-      email: 'aluno.manha@syngate.com',
-      hashSenha: defaultPassword,
-      papel: PapelUsuario.ALUNO,
-      turnoId: turnoAlunoManha.id,
-      matricula: 'ALN2026',
-      cartaoId: 'RFID-ALUN-002',
-      curso: 'Análise e Desenvolvimento de Sistemas',
-      dataExpiracao: new Date('2027-12-31T23:59:59.000Z'), 
-    },
-  });
-
-  // ---------------------------------------------------------
-  // 5. LOGS DE ACESSO (Mock para Relatórios e Dashboards)
-  // ---------------------------------------------------------
-  console.log('📊 Gerando Logs de Acesso para testes de UI...');
-  
-  // Evitamos recriar logs infinitamente se rodarmos o seed várias vezes
-  const totalLogs = await prisma.logAcesso.count();
-  
-  if (totalLogs === 0) {
-    await prisma.logAcesso.createMany({
-      data: [
-        // 1. Acesso Padrão Concedido (Catraca - Entrada)
-        {
-          status: StatusAcesso.CONCEDIDO,
-          finalidade: FinalidadeLog.ENTRADA_PREDIO,
-          direcao: DirecaoAcesso.ENTRADA,
-          usuarioId: professor.id,
-          uidCartao: professor.cartaoId,
-          dispositivoId: catracaEntrada.id,
-          dataHora: new Date(Date.now() - 1000 * 60 * 60 * 24), // Ontem
-        },
-        // 2. Acesso Padrão Concedido (Laboratório)
-        {
-          status: StatusAcesso.CONCEDIDO,
-          finalidade: FinalidadeLog.PRESENCA_SALA,
-          direcao: DirecaoAcesso.ENTRADA,
-          usuarioId: aluno.id,
-          uidCartao: aluno.cartaoId,
-          dispositivoId: leitorLab.id,
-          dataHora: new Date(Date.now() - 1000 * 60 * 60 * 2), // 2 horas atrás
-        },
-        // 3. Acesso Negado (Hard Block) - Aluno tentando entrar no Lab fora do horário
-        {
-          status: StatusAcesso.NEGADO,
-          finalidade: FinalidadeLog.PRESENCA_SALA,
-          direcao: DirecaoAcesso.ENTRADA,
-          motivo: 'Acesso negado: Fora do horário reservado para este laboratório/sala.',
-          usuarioId: aluno.id,
-          uidCartao: aluno.cartaoId,
-          dispositivoId: leitorLab.id,
-          dataHora: new Date(), 
-        },
-        // 4. Soft Audit - Acesso Concedido fora de hora na Catraca Principal
-        {
-          status: StatusAcesso.CONCEDIDO,
-          finalidade: FinalidadeLog.ENTRADA_PREDIO,
-          direcao: DirecaoAcesso.ENTRADA,
-          motivo: 'Aviso: Acesso fora do horário regular (Turno).',
-          usuarioId: aluno.id,
-          uidCartao: aluno.cartaoId,
-          dispositivoId: catracaEntrada.id,
-          dataHora: new Date(Date.now() - 1000 * 60 * 60 * 5), // 5 horas atrás
-        },
-        // 5. Acesso Negado - Invasão/Cartão Desconhecido
-        {
-          status: StatusAcesso.NEGADO,
-          finalidade: FinalidadeLog.ENTRADA_PREDIO,
-          direcao: DirecaoAcesso.ENTRADA,
-          motivo: 'Cartão não registrado no sistema.',
-          uidCartao: 'RFID-DESCONHECIDO-999',
-          dispositivoId: catracaEntrada.id,
-          dataHora: new Date(Date.now() - 1000 * 60 * 30), // 30 minutos atrás
-        }
-      ]
-    });
-  } else {
-    console.log('⚠️  Logs já existem. Pulando geração de logs para evitar dados duplicados.');
-  }
-
-  console.log('----------------------------------------------------');
-  console.log('✅ Seed completo executado com sucesso!');
-  console.log(`👤 Gestor: ${gestor.email}`);
-  console.log(`👤 Funcionário: ${funcionario.email}`);
-  console.log(`👤 Professor: ${professor.email}`);
-  console.log(`👤 Aluno: ${aluno.email}`);
-  console.log(`🔑 Senha Padrão para todos: Senha@123`);
-  console.log('----------------------------------------------------');
-}
-
-main()
-  .catch((e) => {
-    console.error('❌ Falha ao rodar o Seed:', e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
 </file>
 
 <file path="README.md">
@@ -646,80 +701,439 @@ redis.on('connect', () => {
 });
 </file>
 
-<file path="src/middlewares/error.middleware.ts">
-import { Request, Response, NextFunction } from 'express';
+<file path="src/modules/users/users.controller.ts">
+import { Request, Response } from 'express';
+import { UsersService } from './users.service';
 
-export const errorHandler = (
-  err: Error,
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  if (req.log) {
-    req.log.error({ err, msg: err.message });
-  } else {
-    console.error('[Unhandled Error]', err);
-  }
+export class UsersController {
+  private usersService = new UsersService();
 
-  const isProduction = process.env.NODE_ENV === 'production';
+  create = async (req: Request, res: Response) => {
+    try {
+      const user = await this.usersService.create(req.body);
+      return res.status(201).json({ status: 'success', data: user });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) {
+        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
 
-  return res.status(500).json({
-    status: 'error',
-    message: 'Erro interno do servidor.',
-    ...( !isProduction && { details: err.message, stack: err.stack } )
-  });
-};
+  findAll = async (req: Request, res: Response) => {
+    const page = Number(req.query.page);
+    const limit = Number(req.query.limit);
+    const search = req.query.search as string | undefined;
+
+    const result = await this.usersService.findAll(page, limit, search);
+    
+    return res.status(200).json({
+      status: 'success',
+      data: result.data,
+      meta: result.meta
+    });
+  };
+
+  getProfile = async (req: Request, res: Response) => {
+    const userId = req.user!.sub;
+    const user = await this.usersService.findById(userId);
+    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
+    return res.status(200).json({ status: 'success', data: user });
+  };
+
+  findById = async (req: Request, res: Response) => {
+    const id = req.params.id as string; 
+    const user = await this.usersService.findById(id);
+    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
+    return res.status(200).json({ status: 'success', data: user });
+  };
+
+  update = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const user = await this.usersService.update(id, req.body);
+      return res.status(200).json({ status: 'success', data: user });
+    } catch (error) {
+      return res.status(400).json({ status: 'error', message: 'Erro ao atualizar usuário.' });
+    }
+  };
+
+  delete = async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    await this.usersService.softDelete(id);
+    return res.status(204).send();
+  };
+
+  linkCard = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const user = await this.usersService.linkCard(id, req.body.cartaoId);
+      return res.status(200).json({ status: 'success', data: user });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) {
+        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+}
 </file>
 
-<file path="src/middlewares/role.middleware.ts">
-import { Request, Response, NextFunction } from 'express';
+<file path="src/schemas/auth.schema.ts">
+import { z } from 'zod';
 import { PapelUsuario } from '@prisma/client';
 
-export const roleMiddleware = (papeisPermitidos: PapelUsuario[]) => {
-  return (req: Request, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json({ status: 'error', message: 'Usuário não autenticado.' });
-    }
+export const loginSchema = z.object({
+  body: z.object({
+    email: z.string().email('Formato de e-mail inválido.'),
+    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
+  }),
+});
 
-    if (!papeisPermitidos.includes(req.user.papel)) {
-      return res.status(403).json({ status: 'error', message: 'Acesso negado. Privilégios insuficientes.' });
-    }
+export const cadastroSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres.'),
+    email: z.string().email('Formato de e-mail inválido.'),
+    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
+    papel: z.nativeEnum(PapelUsuario).optional(),
+  }),
+});
 
-    return next();
-  };
-};
+export const refreshTokenSchema = z.object({
+  body: z.object({
+    refreshToken: z.string().min(1, 'Refresh token é obrigatório.'),
+  }),
+});
 </file>
 
-<file path="src/middlewares/validate.middlewares.ts">
-import { Request, Response, NextFunction } from 'express';
-import { AnyZodObject, ZodError } from 'zod';
+<file path=".gitignore">
+node_modules/
+.env
+dist/
+repomix-output.txt
+</file>
 
-export const validate = (schema: AnyZodObject) => {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      await schema.parseAsync({
-        body: req.body,
-        query: req.query,
-        params: req.params,
-      });
-      return next();
-    } catch (error) {
-      if (error instanceof ZodError) {
-        const formattedErrors = error.errors.map((err) => ({
-          campo: err.path.join('.'),
-          mensagem: err.message,
-        }));
-        
-        return res.status(400).json({
-          status: 'error',
-          message: 'Erro de validação nos dados fornecidos.',
-          errors: formattedErrors,
-        });
-      }
-      return next(error);
-    }
-  };
-};
+<file path="docker-compose.yml">
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: syngate-postgres
+    environment:
+      POSTGRES_USER: docker
+      POSTGRES_PASSWORD: dockerpassword
+      POSTGRES_DB: syngate_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - syngate-pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: syngate-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - syngate-redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  syngate-pg-data:
+  syngate-redis-data:
+</file>
+
+<file path="prisma.config.ts">
+import "dotenv/config";
+import { defineConfig } from "prisma/config";
+
+export default defineConfig({
+  schema: "prisma/schema.prisma",
+  migrations: {
+    path: "prisma/migrations",
+  },
+  datasource: {
+    url: process.env["DATABASE_URL"],
+  },
+});
+</file>
+
+<file path="prisma/seed.ts">
+import { 
+  PrismaClient, 
+  PapelUsuario, 
+  TipoDispositivo, 
+  StatusAcesso, 
+  FinalidadeLog, 
+  DirecaoAcesso 
+} from '@prisma/client';
+import { hashPassword } from '../src/shared/utils/hash';
+import { hashDeviceKey } from '../src/shared/utils/device-key';
+
+const prisma = new PrismaClient();
+
+/**
+ * Convenção de dias da semana: padrão nativo JavaScript (Date.getDay())
+ * 0 = Domingo, 1 = Segunda, 2 = Terça, 3 = Quarta,
+ * 4 = Quinta, 5 = Sexta, 6 = Sábado
+ */
+
+async function main() {
+  console.log('🌱 Iniciando expansão de dados do Seed com horários granulares...');
+
+  // ---------------------------------------------------------
+  // 1. TURNOS
+  // ---------------------------------------------------------
+  console.log('⏳ Criando Turnos de Alunos...');
+
+  // diasSemana: [1,2,3,4,5] = Segunda a Sexta (padrão JS 0-6)
+  const turnoAlunoManha = await prisma.turno.upsert({
+    where: { id: 'aluno-manha' },
+    update: {},
+    create: { id: 'aluno-manha', nome: 'Aluno - Manhã', horaInicio: 480, horaFim: 720, diasSemana: [1, 2, 3, 4, 5] }, // 08:00 às 12:00
+  });
+
+  const turnoAlunoTarde = await prisma.turno.upsert({
+    where: { id: 'aluno-tarde' },
+    update: {},
+    create: { id: 'aluno-tarde', nome: 'Aluno - Tarde', horaInicio: 780, horaFim: 1020, diasSemana: [1, 2, 3, 4, 5] }, // 13:00 às 17:00
+  });
+
+  const turnoAlunoNoite = await prisma.turno.upsert({
+    where: { id: 'aluno-noite' },
+    update: {},
+    create: { id: 'aluno-noite', nome: 'Aluno - Noite', horaInicio: 1080, horaFim: 1320, diasSemana: [1, 2, 3, 4, 5] }, // 18:00 às 22:00
+  });
+
+  console.log('⏳ Criando Turnos de Professores (com margem de 30min)...');
+
+  const turnoProfManha = await prisma.turno.upsert({
+    where: { id: 'prof-manha' },
+    update: {},
+    create: { id: 'prof-manha', nome: 'Professor - Manhã', horaInicio: 450, horaFim: 750, diasSemana: [1, 2, 3, 4, 5] }, // 07:30 às 12:30
+  });
+
+  const turnoProfNoite = await prisma.turno.upsert({
+    where: { id: 'prof-noite' },
+    update: {},
+    create: { id: 'prof-noite', nome: 'Professor - Noite', horaInicio: 1050, horaFim: 1350, diasSemana: [1, 2, 3, 4, 5] }, // 17:30 às 22:30
+  });
+
+  console.log('⏳ Criando Turnos de Staff e Gestão...');
+
+  const turnoComercial = await prisma.turno.upsert({
+    where: { id: 'staff-comercial' },
+    update: {},
+    create: { id: 'staff-comercial', nome: 'Funcionário - Comercial', horaInicio: 420, horaFim: 1080, diasSemana: [1, 2, 3, 4, 5] }, // 07:00 às 18:00
+  });
+
+  // diasSemana: [1,2,3,4,5,6] = Segunda a Sábado
+  const turnoIntegral = await prisma.turno.upsert({
+    where: { id: 'gestao-integral' },
+    update: {},
+    create: { id: 'gestao-integral', nome: 'Gestor - Integral', horaInicio: 360, horaFim: 1439, diasSemana: [1, 2, 3, 4, 5, 6] }, // 06:00 às 23:59
+  });
+
+  // ---------------------------------------------------------
+  // 2. SALAS
+  // ---------------------------------------------------------
+  console.log('🏢 Criando Salas...');
+
+  const portaria = await prisma.sala.upsert({
+    where: { nome_bloco: { nome: 'Portaria Principal', bloco: 'Entrada' } },
+    update: {},
+    create: { nome: 'Portaria Principal', bloco: 'Entrada' },
+  });
+
+  const lab101 = await prisma.sala.upsert({
+    where: { nome_bloco: { nome: 'Laboratório 101', bloco: 'A' } },
+    update: {},
+    create: { nome: 'Laboratório 101', bloco: 'A' },
+  });
+
+  // ---------------------------------------------------------
+  // 3. DISPOSITIVOS (IoT)
+  // ---------------------------------------------------------
+  console.log('🔌 Criando Dispositivos IoT...');
+
+  const fakeDeviceSecret = 'super-secret-key-123';
+  const hashedDeviceKey = hashDeviceKey(fakeDeviceSecret);
+
+  const catracaEntrada = await prisma.dispositivo.upsert({
+    where: { enderecoMac: 'AA:BB:CC:DD:EE:01' },
+    update: {},
+    create: {
+      nome: 'Catraca Principal',
+      tipo: TipoDispositivo.CATRACA,
+      enderecoMac: 'AA:BB:CC:DD:EE:01',
+      hashChaveSeguranca: hashedDeviceKey,
+      salaId: portaria.id,
+      ipLocal: '192.168.1.100',
+    },
+  });
+
+  const leitorLab = await prisma.dispositivo.upsert({
+    where: { enderecoMac: 'AA:BB:CC:DD:EE:02' },
+    update: {},
+    create: {
+      nome: 'Leitor Lab 101',
+      tipo: TipoDispositivo.LEITOR_CARTAO,
+      enderecoMac: 'AA:BB:CC:DD:EE:02',
+      hashChaveSeguranca: hashedDeviceKey,
+      salaId: lab101.id,
+      ipLocal: '192.168.1.101',
+    },
+  });
+
+  // ---------------------------------------------------------
+  // 4. USUÁRIOS
+  // ---------------------------------------------------------
+  console.log('👥 Criando Usuários...');
+
+  const defaultPassword = await hashPassword('Senha@123');
+
+  const gestor = await prisma.usuario.upsert({
+    where: { email: 'admin@syngate.com' },
+    update: {},
+    create: {
+      nome: 'Administrador do Sistema',
+      email: 'admin@syngate.com',
+      hashSenha: defaultPassword,
+      papel: PapelUsuario.GESTOR,
+      turnoId: turnoIntegral.id,
+      matricula: 'ADM001',
+      emailVerificado: true,
+    },
+  });
+
+  const funcionario = await prisma.usuario.upsert({
+    where: { email: 'recepcao@syngate.com' },
+    update: {},
+    create: {
+      nome: 'Maria Recepção',
+      email: 'recepcao@syngate.com',
+      hashSenha: defaultPassword,
+      papel: PapelUsuario.FUNCIONARIO,
+      turnoId: turnoComercial.id,
+      matricula: 'FUN100',
+      cartaoId: 'RFID-FUN-001',
+      emailVerificado: true,
+    },
+  });
+
+  const professor = await prisma.usuario.upsert({
+    where: { email: 'professor.manha@syngate.com' },
+    update: {},
+    create: {
+      nome: 'Professor Carlos (Matutino)',
+      email: 'professor.manha@syngate.com',
+      hashSenha: defaultPassword,
+      papel: PapelUsuario.PROFESSOR,
+      turnoId: turnoProfManha.id,
+      matricula: 'PRF2026',
+      cartaoId: 'RFID-PROF-001',
+      curso: 'Sistemas de Informação',
+      emailVerificado: true,
+    },
+  });
+
+  const aluno = await prisma.usuario.upsert({
+    where: { email: 'aluno.manha@syngate.com' },
+    update: {},
+    create: {
+      nome: 'João Estudante (Matutino)',
+      email: 'aluno.manha@syngate.com',
+      hashSenha: defaultPassword,
+      papel: PapelUsuario.ALUNO,
+      turnoId: turnoAlunoManha.id,
+      matricula: 'ALN2026',
+      cartaoId: 'RFID-ALUN-002',
+      curso: 'Análise e Desenvolvimento de Sistemas',
+      dataExpiracao: new Date('2027-12-31T23:59:59.000Z'),
+      emailVerificado: true,
+    },
+  });
+
+  // ---------------------------------------------------------
+  // 5. LOGS DE ACESSO
+  // ---------------------------------------------------------
+  console.log('📊 Gerando Logs de Acesso para testes de UI...');
+
+  const totalLogs = await prisma.logAcesso.count();
+
+  if (totalLogs === 0) {
+    await prisma.logAcesso.createMany({
+      data: [
+        {
+          status: StatusAcesso.CONCEDIDO,
+          finalidade: FinalidadeLog.ENTRADA_PREDIO,
+          direcao: DirecaoAcesso.ENTRADA,
+          usuarioId: professor.id,
+          uidCartao: professor.cartaoId,
+          dispositivoId: catracaEntrada.id,
+          dataHora: new Date(Date.now() - 1000 * 60 * 60 * 24),
+        },
+        {
+          status: StatusAcesso.CONCEDIDO,
+          finalidade: FinalidadeLog.PRESENCA_SALA,
+          direcao: DirecaoAcesso.ENTRADA,
+          usuarioId: aluno.id,
+          uidCartao: aluno.cartaoId,
+          dispositivoId: leitorLab.id,
+          dataHora: new Date(Date.now() - 1000 * 60 * 60 * 2),
+        },
+        {
+          status: StatusAcesso.NEGADO,
+          finalidade: FinalidadeLog.PRESENCA_SALA,
+          direcao: DirecaoAcesso.ENTRADA,
+          motivo: 'Acesso negado: Fora do horário reservado para este laboratório/sala.',
+          usuarioId: aluno.id,
+          uidCartao: aluno.cartaoId,
+          dispositivoId: leitorLab.id,
+          dataHora: new Date(),
+        },
+        {
+          status: StatusAcesso.CONCEDIDO,
+          finalidade: FinalidadeLog.ENTRADA_PREDIO,
+          direcao: DirecaoAcesso.ENTRADA,
+          motivo: 'Aviso: Acesso fora do horário regular (Turno).',
+          usuarioId: aluno.id,
+          uidCartao: aluno.cartaoId,
+          dispositivoId: catracaEntrada.id,
+          dataHora: new Date(Date.now() - 1000 * 60 * 60 * 5),
+        },
+        {
+          status: StatusAcesso.NEGADO,
+          finalidade: FinalidadeLog.ENTRADA_PREDIO,
+          direcao: DirecaoAcesso.ENTRADA,
+          motivo: 'Cartão não registrado no sistema.',
+          uidCartao: 'RFID-DESCONHECIDO-999',
+          dispositivoId: catracaEntrada.id,
+          dataHora: new Date(Date.now() - 1000 * 60 * 30),
+        },
+      ],
+    });
+  } else {
+    console.log('⚠️  Logs já existem. Pulando geração de logs para evitar dados duplicados.');
+  }
+
+  console.log('----------------------------------------------------');
+  console.log('✅ Seed completo executado com sucesso!');
+  console.log(`👤 Gestor: ${gestor.email}`);
+  console.log(`👤 Funcionário: ${funcionario.email}`);
+  console.log(`👤 Professor: ${professor.email}`);
+  console.log(`👤 Aluno: ${aluno.email}`);
+  console.log(`🔑 Senha Padrão para todos: Senha@123`);
+  console.log('----------------------------------------------------');
+}
+
+main()
+  .catch((e) => {
+    console.error('❌ Falha ao rodar o Seed:', e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
 </file>
 
 <file path="src/modules/auth/auth.controller.ts">
@@ -825,239 +1239,12 @@ router.post('/logout',         authMiddleware,                                 a
 export { router as authRouter };
 </file>
 
-<file path="src/modules/auth/auth.service.ts">
-import jwt from 'jsonwebtoken';
-import { randomBytes, createHash } from 'crypto';
-import { prisma } from '../../lib/prisma';
-import { redis } from '../../lib/redis';
-import { comparePassword, hashPassword } from '../../utils/hash';
-import { LoginPayload, CadastroPayload, TokenResponse } from '../../types/auth.types';
-import { PapelUsuario, TipoToken } from '@prisma/client';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
-const ACCESS_TOKEN_EXPIRES_IN = '15m';
-const REFRESH_TOKEN_EXPIRES_DAYS = 7;
-
-export class AuthService {
-  async login(payload: LoginPayload): Promise<TokenResponse> {
-    const usuario = await prisma.usuario.findUnique({
-      where: { email: payload.email },
-    });
-
-    if (!usuario || !usuario.ativo) {
-      throw new Error('Credenciais inválidas.');
-    }
-
-    if (!usuario.emailVerificado) {
-      throw new Error('E-mail não verificado.');
-    }
-
-    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
-    if (!senhaValida) {
-      throw new Error('Credenciais inválidas.');
-    }
-
-    return this.generateTokens(usuario.id, usuario.papel);
-  }
-
-  async logout(accessToken: string): Promise<void> {
-    try {
-      const decoded = jwt.verify(accessToken, JWT_SECRET) as jwt.JwtPayload;
-      if (decoded.exp) {
-        const tempoRestante = decoded.exp - Math.floor(Date.now() / 1000);
-        if (tempoRestante > 0) {
-          await redis.set(`blacklist:${accessToken}`, 'true', 'EX', tempoRestante);
-        }
-      }
-    } catch {
-    }
-  }
-
-  async cadastro(dados: CadastroPayload): Promise<{ message: string }> {
-    const usuarioExistente = await prisma.usuario.findUnique({
-      where: { email: dados.email },
-    });
-
-    if (usuarioExistente) {
-      throw new Error('E-mail já está em uso.');
-    }
-
-    const senhaHasheada = await hashPassword(dados.senha);
-
-    const tokenVerificacao = randomBytes(32).toString('hex');
-
-    await prisma.usuario.create({
-      data: {
-        nome: dados.nome,
-        email: dados.email,
-        hashSenha: senhaHasheada,
-        papel: dados.papel ?? PapelUsuario.ALUNO,
-        emailVerificado: false,
-        tokenVerificacao,
-      },
-    });
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[DEV] Token de verificação para ${dados.email}: ${tokenVerificacao}`);
-    }
-
-    return { message: 'Cadastro realizado. Verifique seu e-mail para ativar a conta.' };
-  }
-
-  async verificarEmail(token: string): Promise<{ message: string }> {
-    const usuario = await prisma.usuario.findUnique({
-      where: { tokenVerificacao: token },
-    });
-
-    if (!usuario) {
-      throw new Error('Token de verificação inválido ou já utilizado.');
-    }
-
-    await prisma.usuario.update({
-      where: { id: usuario.id },
-      data: {
-        emailVerificado: true,
-        tokenVerificacao: null,
-      },
-    });
-
-    return { message: 'E-mail verificado com sucesso. Você já pode fazer login.' };
-  }
-
-  async refreshToken(tokenString: string): Promise<TokenResponse> {
-    const hash = createHash('sha256').update(tokenString).digest('hex');
-
-    const tokenSalvo = await prisma.token.findUnique({
-      where: { hash },
-      include: { usuario: true },
-    });
-
-    if (
-      !tokenSalvo ||
-      tokenSalvo.revogado ||
-      (tokenSalvo.dataExpiracao && tokenSalvo.dataExpiracao < new Date())
-    ) {
-      throw new Error('Refresh token inválido ou expirado.');
-    }
-
-    if (!tokenSalvo.usuario.ativo) {
-      throw new Error('Usuário inativo.');
-    }
-
-    // Rotaciona o token
-    await prisma.token.delete({ where: { id: tokenSalvo.id } });
-
-    return this.generateTokens(tokenSalvo.usuarioId, tokenSalvo.usuario.papel);
-  }
-
-  private async generateTokens(usuarioId: string, papel: PapelUsuario): Promise<TokenResponse> {
-    const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET, {
-      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
-    });
-
-    const refreshTokenString = randomBytes(40).toString('hex');
-    const refreshTokenHash = createHash('sha256').update(refreshTokenString).digest('hex');
-    const expiracao = new Date();
-    expiracao.setDate(expiracao.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
-
-    await prisma.token.create({
-      data: {
-        tipo: TipoToken.REFRESH,
-        hash: refreshTokenHash,
-        usuarioId,
-        dataExpiracao: expiracao,
-      },
-    });
-
-    return { accessToken, refreshToken: refreshTokenString };
-  }
-}
-</file>
-
-<file path="src/modules/users/users.controller.ts">
-import { Request, Response } from 'express';
-import { UsersService } from './users.service';
-
-export class UsersController {
-  private usersService = new UsersService();
-
-  create = async (req: Request, res: Response) => {
-    try {
-      const user = await this.usersService.create(req.body);
-      return res.status(201).json({ status: 'success', data: user });
-    } catch (error: any) {
-      if (error.message.startsWith('409:')) {
-        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
-      }
-      throw error;
-    }
-  };
-
-  findAll = async (req: Request, res: Response) => {
-    const page = Number(req.query.page);
-    const limit = Number(req.query.limit);
-    const search = req.query.search as string | undefined;
-
-    const result = await this.usersService.findAll(page, limit, search);
-    
-    return res.status(200).json({
-      status: 'success',
-      data: result.data,
-      meta: result.meta
-    });
-  };
-
-  getProfile = async (req: Request, res: Response) => {
-    const userId = req.user!.sub;
-    const user = await this.usersService.findById(userId);
-    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
-    return res.status(200).json({ status: 'success', data: user });
-  };
-
-  findById = async (req: Request, res: Response) => {
-    const id = req.params.id as string; 
-    const user = await this.usersService.findById(id);
-    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
-    return res.status(200).json({ status: 'success', data: user });
-  };
-
-  update = async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id as string;
-      const user = await this.usersService.update(id, req.body);
-      return res.status(200).json({ status: 'success', data: user });
-    } catch (error) {
-      return res.status(400).json({ status: 'error', message: 'Erro ao atualizar usuário.' });
-    }
-  };
-
-  delete = async (req: Request, res: Response) => {
-    const id = req.params.id as string;
-    await this.usersService.softDelete(id);
-    return res.status(204).send();
-  };
-
-  linkCard = async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id as string;
-      const user = await this.usersService.linkCard(id, req.body.cartaoId);
-      return res.status(200).json({ status: 'success', data: user });
-    } catch (error: any) {
-      if (error.message.startsWith('409:')) {
-        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
-      }
-      throw error;
-    }
-  };
-}
-</file>
-
 <file path="src/modules/users/users.routes.ts">
 import { Router } from 'express';
 import { UsersController } from './users.controller';
-import { authMiddleware } from '../../middlewares/auth.middleware';
-import { roleMiddleware } from '../../middlewares/role.middleware';
-import { validate } from '../../middlewares/validate.middlewares';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
+import { roleMiddleware } from '../../shared/middlewares/role.middleware';
+import { validate } from '../../shared/middlewares/validate.middlewares';
 import { 
   createUserSchema, 
   updateUserSchema, 
@@ -1069,13 +1256,10 @@ import { PapelUsuario } from '@prisma/client';
 const router = Router();
 const usersController = new UsersController();
 
-// Camada 1: Autenticação obrigatória
 router.use(authMiddleware);
 
-// Rota de Perfil (Isenta de restrição administrativa, ID inferido via token JWT)
 router.get('/me', usersController.getProfile);
 
-// Camada 2: Apenas Gestores e Coordenadores a partir daqui
 const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
 router.use(roleMiddleware(adminRoles));
 
@@ -1087,163 +1271,6 @@ router.delete('/:id', usersController.delete);
 router.patch('/:id/cartao', validate(linkCardSchema), usersController.linkCard);
 
 export { router as usersRouter };
-</file>
-
-<file path="src/modules/users/users.service.ts">
-import { prisma } from '../../lib/prisma';
-import { hashPassword } from '../../utils/hash';
-import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../types/user.types';
-
-// Centraliza os campos de retorno para blindar o sistema contra vazamento do hashSenha
-const USER_SELECT_FIELDS = {
-  id: true,
-  nome: true,
-  email: true,
-  matricula: true,
-  cartaoId: true,
-  curso: true,
-  papel: true,
-  ativo: true,
-  dataExpiracao: true,
-  turnoId: true,
-  criadoEm: true,
-  atualizadoEm: true,
-};
-
-export class UsersService {
-  async create(data: CreateUsuarioPayload): Promise<UsuarioPublico> {
-    const conflito = await prisma.usuario.findFirst({
-      where: {
-        OR: [
-          { email: data.email },
-          data.matricula ? { matricula: data.matricula } : {},
-        ],
-      },
-    });
-
-    if (conflito) {
-      if (conflito.email === data.email) throw new Error('409:E-mail já está em uso.');
-      if (conflito.matricula === data.matricula) throw new Error('409:Matrícula já está em uso.');
-    }
-
-    const hashSenha = await hashPassword(data.senha);
-
-    return prisma.usuario.create({
-      data: {
-        nome: data.nome,
-        email: data.email,
-        hashSenha,
-        matricula: data.matricula,
-        curso: data.curso,
-        papel: data.papel,
-        turnoId: data.turnoId,
-      },
-      select: USER_SELECT_FIELDS,
-    });
-  }
-
-  async findAll(page: number = 1, limit: number = 10, search?: string) {
-    const skip = (page - 1) * limit;
-
-    const whereClause = search
-      ? {
-          OR: [
-            { nome: { contains: search, mode: 'insensitive' as const } },
-            { email: { contains: search, mode: 'insensitive' as const } },
-            { matricula: { contains: search, mode: 'insensitive' as const } },
-          ],
-        }
-      : {};
-
-    const [total, usuarios] = await Promise.all([
-      prisma.usuario.count({ where: whereClause }),
-      prisma.usuario.findMany({
-        where: whereClause,
-        skip,
-        take: limit,
-        select: USER_SELECT_FIELDS,
-        orderBy: { criadoEm: 'desc' },
-      }),
-    ]);
-
-    return {
-      data: usuarios as UsuarioPublico[],
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-  }
-
-  async findById(id: string): Promise<UsuarioPublico | null> {
-    return prisma.usuario.findUnique({
-      where: { id },
-      select: USER_SELECT_FIELDS,
-    });
-  }
-
-  async update(id: string, data: UpdateUsuarioPayload): Promise<UsuarioPublico> {
-    const { ...dadosSeguros } = data;
-    
-    return prisma.usuario.update({
-      where: { id },
-      data: dadosSeguros,
-      select: USER_SELECT_FIELDS,
-    });
-  }
-
-  async softDelete(id: string): Promise<UsuarioPublico> {
-    return prisma.usuario.update({
-      where: { id },
-      data: { ativo: false },
-      select: USER_SELECT_FIELDS,
-    });
-  }
-
-  async linkCard(id: string, cartaoId: string | null): Promise<UsuarioPublico> {
-    if (cartaoId) {
-      const cardExists = await prisma.usuario.findUnique({ where: { cartaoId } });
-      if (cardExists && cardExists.id !== id) {
-        throw new Error('409:Este cartão RFID já está vinculado a outro usuário.');
-      }
-    }
-
-    return prisma.usuario.update({
-      where: { id },
-      data: { cartaoId },
-      select: USER_SELECT_FIELDS,
-    });
-  }
-}
-</file>
-
-<file path="src/schemas/auth.schema.ts">
-import { z } from 'zod';
-import { PapelUsuario } from '@prisma/client';
-
-export const loginSchema = z.object({
-  body: z.object({
-    email: z.string().email('Formato de e-mail inválido.'),
-    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
-  }),
-});
-
-export const cadastroSchema = z.object({
-  body: z.object({
-    nome: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres.'),
-    email: z.string().email('Formato de e-mail inválido.'),
-    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
-    papel: z.nativeEnum(PapelUsuario).optional(),
-  }),
-});
-
-export const refreshTokenSchema = z.object({
-  body: z.object({
-    refreshToken: z.string().min(1, 'Refresh token é obrigatório.'),
-  }),
-});
 </file>
 
 <file path="src/schemas/user.schema.ts">
@@ -1295,240 +1322,6 @@ export const listUsersSchema = z.object({
 });
 </file>
 
-<file path="src/types/access-log.types.ts">
-import { LogAcesso } from '@prisma/client';
-
-export type LogAcessoDTO = Omit<LogAcesso, 'id'>;
-
-export interface AccessResult {
-  granted: boolean;
-  reason: string;
-}
-</file>
-
-<file path="src/types/device.types.ts">
-import { Dispositivo } from '@prisma/client';
-
-export type DispositivoDTO = Omit<Dispositivo, 'id' | 'logs'>;
-
-export interface DeviceAuthHeader {
-  'x-device-id': string;
-  'x-device-secret': string;
-}
-</file>
-
-<file path="src/types/express.d.ts">
-import { JwtPayload } from './auth.types';
-import { Dispositivo } from '@prisma/client';
-
-declare global {
-  namespace Express {
-    export interface Request {
-      user?: JwtPayload;
-      device?: Dispositivo;
-    }
-  }
-}
-</file>
-
-<file path="src/types/index.ts">
-export * from './user.types';
-export * from './auth.types';
-export * from './device.types';
-export * from './access-log.types';
-</file>
-
-<file path="src/utils/device-key.ts">
-import crypto from 'crypto';
-
-export function generateDeviceKey(): string {
-  return crypto.randomBytes(32).toString('hex');
-}
-
-export function hashDeviceKey(key: string): string {
-  return crypto.createHash('sha256').update(key).digest('hex');
-}
-</file>
-
-<file path="src/utils/hash.ts">
-import bcrypt from 'bcrypt';
-
-const SALT_ROUNDS = process.env.NODE_ENV === 'test' ? 4 : 12;
-
-export async function hashPassword(password: string): Promise<string> {
-  const salt = await bcrypt.genSalt(SALT_ROUNDS);
-  return bcrypt.hash(password, salt);
-}
-
-export async function comparePassword(password: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(password, hash);
-}
-</file>
-
-<file path="src/utils/shift-validator.ts">
-import { Turno } from '@prisma/client';
-
-/**
- * Converte um objeto Date para minutos desde a meia-noite no fuso horário local do servidor.
- */
-export function dateToMinutes(date: Date): number {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  return hours * 60 + minutes;
-}
-
-/**
- * Mapeia o dia da semana nativo do JS (0-6, onde 0 = Domingo) 
- * para o padrão ISO 8601 (1-7, onde 1 = Segunda e 7 = Domingo).
- */
-export function getIsoDayOfWeek(date: Date): number {
-  const jsDay = date.getDay();
-  return jsDay === 0 ? 7 : jsDay;
-}
-
-/**
- * Verifica se um determinado momento está dentro da janela do turno
- * e se o dia da semana atual é permitido.
- */
-export function isWithinShift(date: Date, turno: Turno): boolean {
-  const currentIsoDay = getIsoDayOfWeek(date);
-  
-  if (!turno.diasSemana.includes(currentIsoDay)) {
-    return false;
-  }
-
-  const currentMinutes = dateToMinutes(date);
-
-  // Tratamento para turnos noturnos que atravessam a meia-noite (ex: 22:00 às 06:00)
-  if (turno.horaInicio > turno.horaFim) {
-    return currentMinutes >= turno.horaInicio || currentMinutes <= turno.horaFim;
-  }
-
-  // Turno diurno padrão (ex: 08:00 às 18:00)
-  return currentMinutes >= turno.horaInicio && currentMinutes <= turno.horaFim;
-}
-</file>
-
-<file path=".gitignore">
-node_modules/
-.env
-dist/
-repomix-output.txt
-</file>
-
-<file path="docker-compose.yml">
-services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: syngate-postgres
-    environment:
-      POSTGRES_USER: docker
-      POSTGRES_PASSWORD: dockerpassword
-      POSTGRES_DB: syngate_db
-    ports:
-      - "5433:5432"
-    volumes:
-      - syngate-pg-data:/var/lib/postgresql/data
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: syngate-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - syngate-redis-data:/data
-    restart: unless-stopped
-
-volumes:
-  syngate-pg-data:
-  syngate-redis-data:
-</file>
-
-<file path="prisma.config.ts">
-import "dotenv/config";
-import { defineConfig } from "prisma/config";
-
-export default defineConfig({
-  schema: "prisma/schema.prisma",
-  migrations: {
-    path: "prisma/migrations",
-  },
-  datasource: {
-    url: process.env["DATABASE_URL"],
-  },
-});
-</file>
-
-<file path="src/middlewares/auth.middleware.ts">
-import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { redis } from '../lib/redis';
-import { prisma } from '../lib/prisma';
-import { JwtPayload } from '../types/auth.types';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
-
-export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
-  }
-
-  const token = authHeader.split(' ')[1];
-
-  try {
-    const isBlacklisted = await redis.get(`blacklist:${token}`);
-    if (isBlacklisted) {
-      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
-    }
-
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-
-    const usuario = await prisma.usuario.findUnique({
-      where: { id: decoded.sub, ativo: true },
-    });
-
-    if (!usuario) {
-      return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
-    }
-
-    req.user = { sub: usuario.id, papel: usuario.papel };
-    return next();
-  } catch (error) {
-    return res.status(401).json({ status: 'error', message: 'Não autorizado.' });
-  }
-};
-</file>
-
-<file path="src/middlewares/rate-limit.middleware.ts">
-import { rateLimit } from 'express-rate-limit';
-import { RedisStore } from 'rate-limit-redis';
-import { redis } from '../lib/redis';
-
-/**
- * Limitador de requisições global para evitar ataques de DDoS e Brute Force.
- * Configurado para 100 requisições por IP a cada 15 minutos.
- */
-export const globalRateLimiter = rateLimit({
-  store: new RedisStore({
-    sendCommand: async (...args: string[]) => {
-      const [command, ...rest] = args;
-      return redis.call(command, ...rest) as any;
-    },
-  }),
-  windowMs: 15 * 60 * 1000, // Janela de 15 minutos
-  limit: 100, // Limite de 100 requisições por IP na janela
-  message: {
-    status: 'error',
-    message: 'Muitas requisições originadas deste IP. Por favor, aguarde alguns minutos e tente novamente.',
-  },
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-});
-</file>
-
 <file path="src/server.ts">
 import 'dotenv/config';
 import { app } from './app';
@@ -1558,59 +1351,6 @@ async function bootstrap() {
 bootstrap();
 </file>
 
-<file path="src/types/auth.types.ts">
-import { PapelUsuario } from '@prisma/client';
-
-export interface LoginPayload {
-  email: string;
-  senhaLimpa: string;
-}
-
-export interface CadastroPayload {
-  nome: string;
-  email: string;
-  senha: string;
-  papel?: PapelUsuario;
-}
-
-export interface JwtPayload {
-  sub: string;
-  papel: PapelUsuario;
-}
-
-export interface TokenResponse {
-  accessToken: string;
-  refreshToken?: string;
-}
-</file>
-
-<file path="src/types/user.types.ts">
-import { Usuario, PapelUsuario } from '@prisma/client';
-
-export type UsuarioDTO = Omit<Usuario, 'id' | 'criadoEm' | 'atualizadoEm' | 'logs' | 'tokens'>;
-export type UsuarioPublico = Omit<Usuario, 'hashSenha'>;
-
-export interface CreateUsuarioPayload {
-  nome: string;
-  email: string;
-  senha: string;
-  matricula?: string;
-  curso?: string;
-  papel?: PapelUsuario;
-  turnoId?: string;
-}
-
-export interface UpdateUsuarioPayload {
-  nome?: string;
-  email?: string;
-  matricula?: string;
-  curso?: string;
-  papel?: PapelUsuario;
-  turnoId?: string;
-  ativo?: boolean;
-}
-</file>
-
 <file path="tsconfig.json">
 {
   "compilerOptions": {
@@ -1626,214 +1366,11 @@ export interface UpdateUsuarioPayload {
     "types": ["node"] 
   },
   "include": [
-    "src/**/*", 
-    "prisma.config.ts"
+  "src/**/*",
+  "prisma/**/*",
+  "prisma.config.ts",
   ],
   "exclude": ["node_modules", "dist"]
-}
-</file>
-
-<file path="prisma/schema.prisma">
-// schema.prisma
-//   - hashSenha (guarda o hash bcrypt/argon2, nunca a senha em texto limpo)
-//   - hashChaveSeguranca (guarda o hash da chave IoT, não o segredo puro)
-//   - diasSemana como Int[] (Array nativo do PostgreSQL, facilita filtros)
-//   - horaInicio / horaFim como Int (minutos desde a meia-noite, ex: 480 = 08:00)
-//   - LogAcesso.usuarioId agora é opcional (permite registrar cartões desconhecidos/visitantes)
-//   - Campo uidCartao no LogAcesso para capturar o UID bruto do RFID
-//   - onDelete: SetNull em vez de Cascade (preserva a trilha de auditoria se o usuário for deletado)
-//   - Sala @@unique([nome, bloco]) para evitar duplicidade
-//   - Índices (@@index) no LogAcesso para buscas super rápidas por data, usuário e dispositivo
-//   - Tabela de Token separada do Usuario para gerenciar múltiplos tipos de tokens
-//   - emailVerificado e tokenVerificacao para prevenção de usuários fantasma
-//   - Índices GIN pg_trgm declarados no schema via extendedIndexes (Prisma 7)
-
-generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["extendedIndexes"]
-}
-
-datasource db {
-  provider = "postgresql"
-}
-
-// ─── Enums (Opções Padronizadas) ────────────────────────────────────────────
-
-enum PapelUsuario {
-  ALUNO
-  PROFESSOR
-  FUNCIONARIO
-  COORDENADOR
-  GESTOR
-  VISITANTE
-}
-
-enum TipoDispositivo {
-  CATRACA
-  LEITOR_CARTAO
-}
-
-enum StatusAcesso {
-  CONCEDIDO
-  NEGADO
-}
-
-enum FinalidadeLog {
-  ENTRADA_PREDIO
-  PRESENCA_SALA
-}
-
-enum DirecaoAcesso {
-  ENTRADA
-  SAIDA
-}
-
-enum StatusDispositivo {
-  ATIVO
-  INATIVO
-  MANUTENCAO
-}
-
-enum TipoToken {
-  CHAVE_API
-  REFRESH
-  APP
-}
-
-// ─── Modelos (Tabelas) ──────────────────────────────────────────────────────
-
-model Usuario {
-  id            String       @id @default(uuid())
-  nome          String
-  email         String       @unique
-
-  /// Hash bcrypt ou argon2 — NUNCA guarde a senha em texto limpo
-  hashSenha     String
-  matricula     String?      @unique
-
-  /// UID do cartão RFID/NFC
-  cartaoId      String?      @unique
-  curso         String?
-  papel         PapelUsuario @default(ALUNO)
-  ativo         Boolean      @default(true)
-
-  /// Validade para alunos, terceirizados ou visitantes
-  dataExpiracao DateTime?
-
-  /// Proteção contra usuários fantasma — conta só pode logar após verificação
-  emailVerificado  Boolean @default(false)
-
-  /// Token de verificação de e-mail — nulo após verificação concluída
-  tokenVerificacao String? @unique
-
-  // Relacionamento com Turno
-  turnoId       String?
-  turno         Turno?       @relation(fields: [turnoId], references: [id])
-
-  tokens        Token[]
-  logs          LogAcesso[]
-
-  criadoEm     DateTime @default(now())
-  atualizadoEm DateTime @updatedAt
-
-  // Índices GIN para buscas ILIKE performáticas (pg_trgm)
-  @@index([nome(ops: raw("gin_trgm_ops"))], type: Gin)
-  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin)
-
-  @@map("usuarios")
-}
-
-model Token {
-  id            String    @id @default(uuid())
-  tipo          TipoToken
-
-  /// Guarde apenas o hash SHA-256 do valor real do token
-  hash          String    @unique
-  dataExpiracao DateTime?
-  revogado      Boolean   @default(false)
-
-  usuarioId String
-  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-  criadoEm  DateTime @default(now())
-
-  @@index([usuarioId])
-  @@map("tokens")
-}
-
-model Turno {
-  id   String @id @default(uuid())
-  nome String // Ex: "Manhã", "Tarde", "Noite"
-
-  /// Minutos desde a meia-noite — ex: 480 = 08:00, 720 = 12:00
-  horaInicio Int
-  horaFim    Int
-
-  /// Array de inteiros do PostgreSQL — ex: [1,2,3,4,5] = Seg–Sex
-  diasSemana Int[]
-
-  usuarios Usuario[]
-
-  @@map("turnos")
-}
-
-model Sala {
-  id    String  @id @default(uuid())
-  nome  String
-  bloco String?
-
-  dispositivos Dispositivo[]
-
-  @@unique([nome, bloco]) // Impede criar duas "Sala 101" no "Bloco A"
-  @@map("salas")
-}
-
-model Dispositivo {
-  id     String            @id @default(uuid())
-  nome   String
-  tipo   TipoDispositivo   @default(LEITOR_CARTAO)
-  status StatusDispositivo @default(ATIVO)
-
-  /// Endereço MAC físico do ESP32 — formato: AA:BB:CC:DD:EE:FF
-  enderecoMac String? @unique
-
-  /// Hash SHA-256 da chave secreta que o dispositivo usa para se autenticar
-  hashChaveSeguranca String?
-  ipLocal            String?
-
-  salaId String
-  sala   Sala   @relation(fields: [salaId], references: [id])
-
-  logs LogAcesso[]
-
-  @@map("dispositivos")
-}
-
-model LogAcesso {
-  id         String        @id @default(uuid())
-  dataHora   DateTime      @default(now())
-  status     StatusAcesso
-  finalidade FinalidadeLog @default(ENTRADA_PREDIO)
-  direcao    DirecaoAcesso @default(ENTRADA)
-
-  /// Ex: "Turno inválido", "Cartão expirado", "Cartão desconhecido: A1B2C3D4"
-  motivo String?
-
-  /// Nulo quando o UID do cartão não está registrado no sistema
-  usuarioId String?
-  usuario   Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
-
-  /// UID bruto do RFID lido pelo dispositivo — sempre registrado, mesmo sem usuário
-  uidCartao String?
-
-  dispositivoId String
-  dispositivo   Dispositivo @relation(fields: [dispositivoId], references: [id], onDelete: Cascade)
-
-  @@index([dataHora])
-  @@index([usuarioId, dataHora])
-  @@index([dispositivoId, dataHora])
-  @@index([usuarioId, status])
-
-  @@map("logs_acesso")
 }
 </file>
 
@@ -2310,6 +1847,284 @@ export const openapiSpecification = {
 };
 </file>
 
+<file path="src/modules/auth/auth.service.ts">
+import jwt from 'jsonwebtoken';
+import { randomBytes, createHash } from 'crypto';
+import { prisma } from '../../lib/prisma';
+import { redis } from '../../lib/redis';
+import { comparePassword, hashPassword } from '../../shared/utils/hash';
+import { LoginPayload, CadastroPayload, TokenResponse } from '../../shared/types/auth.types';
+import { PapelUsuario, TipoToken } from '@prisma/client';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
+const ACCESS_TOKEN_EXPIRES_IN = '15m';
+const REFRESH_TOKEN_EXPIRES_DAYS = 7;
+
+export class AuthService {
+  async login(payload: LoginPayload): Promise<TokenResponse> {
+    const usuario = await prisma.usuario.findUnique({
+      where: { email: payload.email },
+    });
+
+    if (!usuario || !usuario.ativo) {
+      throw new Error('Credenciais inválidas.');
+    }
+
+    if (!usuario.emailVerificado) {
+      throw new Error('E-mail não verificado.');
+    }
+
+    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
+    if (!senhaValida) {
+      throw new Error('Credenciais inválidas.');
+    }
+
+    return this.generateTokens(usuario.id, usuario.papel);
+  }
+
+  async logout(accessToken: string): Promise<void> {
+    try {
+      const decoded = jwt.verify(accessToken, JWT_SECRET) as jwt.JwtPayload;
+      if (decoded.exp) {
+        const tempoRestante = decoded.exp - Math.floor(Date.now() / 1000);
+        if (tempoRestante > 0) {
+          await redis.set(`blacklist:${accessToken}`, 'true', 'EX', tempoRestante);
+        }
+      }
+    } catch {
+    }
+  }
+
+  async cadastro(dados: CadastroPayload): Promise<{ message: string }> {
+    const usuarioExistente = await prisma.usuario.findUnique({
+      where: { email: dados.email },
+    });
+
+    if (usuarioExistente) {
+      throw new Error('E-mail já está em uso.');
+    }
+
+    const senhaHasheada = await hashPassword(dados.senha);
+
+    const tokenVerificacao = randomBytes(32).toString('hex');
+
+    await prisma.usuario.create({
+      data: {
+        nome: dados.nome,
+        email: dados.email,
+        hashSenha: senhaHasheada,
+        papel: dados.papel ?? PapelUsuario.ALUNO,
+        emailVerificado: false,
+        tokenVerificacao,
+      },
+    });
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DEV] Token de verificação para ${dados.email}: ${tokenVerificacao}`);
+    }
+
+    return { message: 'Cadastro realizado. Verifique seu e-mail para ativar a conta.' };
+  }
+
+  async verificarEmail(token: string): Promise<{ message: string }> {
+    const usuario = await prisma.usuario.findUnique({
+      where: { tokenVerificacao: token },
+    });
+
+    if (!usuario) {
+      throw new Error('Token de verificação inválido ou já utilizado.');
+    }
+
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        emailVerificado: true,
+        tokenVerificacao: null,
+      },
+    });
+
+    return { message: 'E-mail verificado com sucesso. Você já pode fazer login.' };
+  }
+
+  async refreshToken(tokenString: string): Promise<TokenResponse> {
+    const hash = createHash('sha256').update(tokenString).digest('hex');
+
+    const tokenSalvo = await prisma.token.findUnique({
+      where: { hash },
+      include: { usuario: true },
+    });
+
+    if (
+      !tokenSalvo ||
+      tokenSalvo.revogado ||
+      (tokenSalvo.dataExpiracao && tokenSalvo.dataExpiracao < new Date())
+    ) {
+      throw new Error('Refresh token inválido ou expirado.');
+    }
+
+    if (!tokenSalvo.usuario.ativo) {
+      throw new Error('Usuário inativo.');
+    }
+
+    await prisma.token.delete({ where: { id: tokenSalvo.id } });
+
+    return this.generateTokens(tokenSalvo.usuarioId, tokenSalvo.usuario.papel);
+  }
+
+  private async generateTokens(usuarioId: string, papel: PapelUsuario): Promise<TokenResponse> {
+    const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET, {
+      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+    });
+
+    const refreshTokenString = randomBytes(40).toString('hex');
+    const refreshTokenHash = createHash('sha256').update(refreshTokenString).digest('hex');
+    const expiracao = new Date();
+    expiracao.setDate(expiracao.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+
+    await prisma.token.create({
+      data: {
+        tipo: TipoToken.REFRESH,
+        hash: refreshTokenHash,
+        usuarioId,
+        dataExpiracao: expiracao,
+      },
+    });
+
+    return { accessToken, refreshToken: refreshTokenString };
+  }
+}
+</file>
+
+<file path="src/modules/users/users.service.ts">
+import { prisma } from '../../lib/prisma';
+import { hashPassword } from '../../shared/utils/hash';
+import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../shared/types/user.types';
+
+const USER_SELECT_FIELDS = {
+  id: true,
+  nome: true,
+  email: true,
+  matricula: true,
+  cartaoId: true,
+  curso: true,
+  papel: true,
+  ativo: true,
+  dataExpiracao: true,
+  turnoId: true,
+  criadoEm: true,
+  atualizadoEm: true,
+  emailVerificado: true,
+};
+
+export class UsersService {
+  async create(data: CreateUsuarioPayload): Promise<UsuarioPublico> {
+    const conflito = await prisma.usuario.findFirst({
+      where: {
+        OR: [
+          { email: data.email },
+          data.matricula ? { matricula: data.matricula } : {},
+        ],
+      },
+    });
+
+    if (conflito) {
+      if (conflito.email === data.email) throw new Error('409:E-mail já está em uso.');
+      if (conflito.matricula === data.matricula) throw new Error('409:Matrícula já está em uso.');
+    }
+
+    const hashSenha = await hashPassword(data.senha);
+
+    return prisma.usuario.create({
+      data: {
+        nome: data.nome,
+        email: data.email,
+        hashSenha,
+        matricula: data.matricula,
+        curso: data.curso,
+        papel: data.papel,
+        turnoId: data.turnoId,
+      },
+      select: USER_SELECT_FIELDS,
+    });
+  }
+
+  async findAll(page: number = 1, limit: number = 10, search?: string) {
+    const skip = (page - 1) * limit;
+
+    const whereClause = search
+      ? {
+          OR: [
+            { nome: { contains: search, mode: 'insensitive' as const } },
+            { email: { contains: search, mode: 'insensitive' as const } },
+            { matricula: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {};
+
+    const [total, usuarios] = await Promise.all([
+      prisma.usuario.count({ where: whereClause }),
+      prisma.usuario.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        select: USER_SELECT_FIELDS,
+        orderBy: { criadoEm: 'desc' },
+      }),
+    ]);
+
+    return {
+      data: usuarios as UsuarioPublico[],
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async findById(id: string): Promise<UsuarioPublico | null> {
+    return prisma.usuario.findUnique({
+      where: { id },
+      select: USER_SELECT_FIELDS,
+    });
+  }
+
+  async update(id: string, data: UpdateUsuarioPayload): Promise<UsuarioPublico> {
+    const { ...dadosSeguros } = data;
+    
+    return prisma.usuario.update({
+      where: { id },
+      data: dadosSeguros,
+      select: USER_SELECT_FIELDS,
+    });
+  }
+
+  async softDelete(id: string): Promise<UsuarioPublico> {
+    return prisma.usuario.update({
+      where: { id },
+      data: { ativo: false },
+      select: USER_SELECT_FIELDS,
+    });
+  }
+
+  async linkCard(id: string, cartaoId: string | null): Promise<UsuarioPublico> {
+    if (cartaoId) {
+      const cardExists = await prisma.usuario.findUnique({ where: { cartaoId } });
+      if (cardExists && cardExists.id !== id) {
+        throw new Error('409:Este cartão RFID já está vinculado a outro usuário.');
+      }
+    }
+
+    return prisma.usuario.update({
+      where: { id },
+      data: { cartaoId },
+      select: USER_SELECT_FIELDS,
+    });
+  }
+}
+</file>
+
 <file path="package.json">
 {
   "name": "syngate-backend",
@@ -2373,7 +2188,7 @@ export const openapiSpecification = {
     "@types/ioredis": "^4.28.10",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
-    "@types/node": "^25.7.0",
+    "@types/node": "^25.9.1",
     "@types/pdfkit": "^0.17.6",
     "@types/pg": "^8.20.0",
     "@types/pino-http": "^5.8.4",
@@ -2391,6 +2206,209 @@ export const openapiSpecification = {
 }
 </file>
 
+<file path="prisma/schema.prisma">
+// schema.prisma
+//   - hashSenha (guarda o hash bcrypt/argon2, nunca a senha em texto limpo)
+//   - hashChaveSeguranca (guarda o hash da chave IoT, não o segredo puro)
+//   - diasSemana como Int[] (Array nativo do PostgreSQL, facilita filtros)
+//   - horaInicio / horaFim como Int (minutos desde a meia-noite, ex: 480 = 08:00)
+//   - LogAcesso.usuarioId agora é opcional (permite registrar cartões desconhecidos/visitantes)
+//   - Campo uidCartao no LogAcesso para capturar o UID bruto do RFID
+//   - onDelete: SetNull em vez de Cascade (preserva a trilha de auditoria se o usuário for deletado)
+//   - Sala @@unique([nome, bloco]) para evitar duplicidade
+//   - Índices (@@index) no LogAcesso para buscas super rápidas por data, usuário e dispositivo
+//   - Tabela de Token separada do Usuario para gerenciar múltiplos tipos de tokens
+//   - emailVerificado e tokenVerificacao para prevenção de usuários fantasma
+//   - Índices GIN pg_trgm declarados no schema via extendedIndexes (Prisma 7)
+
+generator client {
+  provider        = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums (Opções Padronizadas) ────────────────────────────────────────────
+
+enum PapelUsuario {
+  ALUNO
+  PROFESSOR
+  FUNCIONARIO
+  COORDENADOR
+  GESTOR
+  VISITANTE
+}
+
+enum TipoDispositivo {
+  CATRACA
+  LEITOR_CARTAO
+}
+
+enum StatusAcesso {
+  CONCEDIDO
+  NEGADO
+}
+
+enum FinalidadeLog {
+  ENTRADA_PREDIO
+  PRESENCA_SALA
+}
+
+enum DirecaoAcesso {
+  ENTRADA
+  SAIDA
+}
+
+enum StatusDispositivo {
+  ATIVO
+  INATIVO
+  MANUTENCAO
+}
+
+enum TipoToken {
+  CHAVE_API
+  REFRESH
+  APP
+}
+
+// ─── Modelos (Tabelas) ──────────────────────────────────────────────────────
+
+model Usuario {
+  id            String       @id @default(uuid())
+  nome          String
+  email         String       @unique
+
+  /// Hash bcrypt ou argon2 — NUNCA guarde a senha em texto limpo
+  hashSenha     String
+  matricula     String?      @unique
+
+  /// UID do cartão RFID/NFC
+  cartaoId      String?      @unique
+  curso         String?
+  papel         PapelUsuario @default(ALUNO)
+  ativo         Boolean      @default(true)
+
+  /// Validade para alunos, terceirizados ou visitantes
+  dataExpiracao DateTime?
+
+  /// Proteção contra usuários fantasma — conta só pode logar após verificação
+  emailVerificado  Boolean @default(false)
+
+  /// Token de verificação de e-mail — nulo após verificação concluída
+  tokenVerificacao String? @unique
+
+  // Relacionamento com Turno
+  turnoId       String?
+  turno         Turno?       @relation(fields: [turnoId], references: [id])
+
+  tokens        Token[]
+  logs          LogAcesso[]
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  // Índices GIN para buscas ILIKE performáticas (pg_trgm)
+  @@index([nome(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin)
+
+  @@map("usuarios")
+}
+
+model Token {
+  id            String    @id @default(uuid())
+  tipo          TipoToken
+
+  /// Guarde apenas o hash SHA-256 do valor real do token
+  hash          String    @unique
+  dataExpiracao DateTime?
+  revogado      Boolean   @default(false)
+
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  criadoEm  DateTime @default(now())
+
+  @@index([usuarioId])
+  @@map("tokens")
+}
+
+model Turno {
+  id   String @id @default(uuid())
+  nome String // Ex: "Manhã", "Tarde", "Noite"
+
+  /// Minutos desde a meia-noite — ex: 480 = 08:00, 720 = 12:00
+  horaInicio Int
+  horaFim    Int
+
+  /// Array de inteiros do PostgreSQL — ex: [1,2,3,4,5] = Seg–Sex
+  diasSemana Int[]
+
+  usuarios Usuario[]
+
+  @@map("turnos")
+}
+
+model Sala {
+  id    String  @id @default(uuid())
+  nome  String
+  bloco String?
+
+  dispositivos Dispositivo[]
+
+  @@unique([nome, bloco]) // Impede criar duas "Sala 101" no "Bloco A"
+  @@map("salas")
+}
+
+model Dispositivo {
+  id     String            @id @default(uuid())
+  nome   String
+  tipo   TipoDispositivo   @default(LEITOR_CARTAO)
+  status StatusDispositivo @default(ATIVO)
+
+  /// Endereço MAC físico do ESP32 — formato: AA:BB:CC:DD:EE:FF
+  enderecoMac String? @unique
+
+  /// Hash SHA-256 da chave secreta que o dispositivo usa para se autenticar
+  hashChaveSeguranca String?
+  ipLocal            String?
+
+  salaId String
+  sala   Sala   @relation(fields: [salaId], references: [id])
+
+  logs LogAcesso[]
+
+  @@map("dispositivos")
+}
+
+model LogAcesso {
+  id         String        @id @default(uuid())
+  dataHora   DateTime      @default(now())
+  status     StatusAcesso
+  finalidade FinalidadeLog @default(ENTRADA_PREDIO)
+  direcao    DirecaoAcesso @default(ENTRADA)
+
+  /// Ex: "Turno inválido", "Cartão expirado", "Cartão desconhecido: A1B2C3D4"
+  motivo String?
+
+  /// Nulo quando o UID do cartão não está registrado no sistema
+  usuarioId String?
+  usuario   Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  /// UID bruto do RFID lido pelo dispositivo — sempre registrado, mesmo sem usuário
+  uidCartao String?
+
+  dispositivoId String
+  dispositivo   Dispositivo @relation(fields: [dispositivoId], references: [id], onDelete: Cascade)
+
+  @@index([dataHora])
+  @@index([usuarioId, dataHora])
+  @@index([dispositivoId, dataHora])
+  @@index([usuarioId, status])
+
+  @@map("logs_acesso")
+}
+</file>
+
 <file path="src/app.ts">
 import 'express-async-errors';
 import express from 'express';
@@ -2398,11 +2416,10 @@ import cors from 'cors';
 import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import swaggerUi from 'swagger-ui-express';
-
 import { openapiSpecification } from './config/swagger';
 import { renderScalar } from './config/scalar-config';
-import { globalRateLimiter } from './middlewares/rate-limit.middleware';
-import { errorHandler } from './middlewares/error.middleware';
+import { globalRateLimiter } from './shared/middlewares/rate-limit.middleware';
+import { errorHandler } from './shared/middlewares/error.middleware';
 import { authRouter } from './modules/auth/auth.routes';
 import { usersRouter } from './modules/users/users.routes';
 

@@ -1,21 +1,23 @@
 import { Turno } from '@prisma/client';
 
 /**
+ * Convenção de dias da semana: padrão nativo JavaScript (Date.getDay())
+ * 0 = Domingo, 1 = Segunda, 2 = Terça, 3 = Quarta,
+ * 4 = Quinta, 5 = Sexta, 6 = Sábado
+ */
+
+/**
  * Converte um objeto Date para minutos desde a meia-noite no fuso horário local do servidor.
  */
 export function dateToMinutes(date: Date): number {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  return hours * 60 + minutes;
+  return date.getHours() * 60 + date.getMinutes();
 }
 
 /**
- * Mapeia o dia da semana nativo do JS (0-6, onde 0 = Domingo) 
- * para o padrão ISO 8601 (1-7, onde 1 = Segunda e 7 = Domingo).
+ * Retorna o dia da semana no padrão nativo JS (0-6, onde 0 = Domingo).
  */
-export function getIsoDayOfWeek(date: Date): number {
-  const jsDay = date.getDay();
-  return jsDay === 0 ? 7 : jsDay;
+export function getDayOfWeek(date: Date): number {
+  return date.getDay();
 }
 
 /**
@@ -23,9 +25,9 @@ export function getIsoDayOfWeek(date: Date): number {
  * e se o dia da semana atual é permitido.
  */
 export function isWithinShift(date: Date, turno: Turno): boolean {
-  const currentIsoDay = getIsoDayOfWeek(date);
-  
-  if (!turno.diasSemana.includes(currentIsoDay)) {
+  const currentDay = getDayOfWeek(date);
+
+  if (!turno.diasSemana.includes(currentDay)) {
     return false;
   }
 

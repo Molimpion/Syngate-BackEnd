@@ -2,8 +2,8 @@ import jwt from 'jsonwebtoken';
 import { randomBytes, createHash } from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { redis } from '../../lib/redis';
-import { comparePassword, hashPassword } from '../../utils/hash';
-import { LoginPayload, CadastroPayload, TokenResponse } from '../../types/auth.types';
+import { comparePassword, hashPassword } from '../../shared/utils/hash';
+import { LoginPayload, CadastroPayload, TokenResponse } from '../../shared/types/auth.types';
 import { PapelUsuario, TipoToken } from '@prisma/client';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
