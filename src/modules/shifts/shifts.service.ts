@@ -1,25 +1,10 @@
 import { prisma } from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
-
-export interface CreateShiftPayload {
-  nome: string;
-  horaInicio: number;
-  horaFim: number;
-  diasSemana: number[];
-}
-
-export interface UpdateShiftPayload {
-  nome?: string;
-  horaInicio?: number;
-  horaFim?: number;
-  diasSemana?: number[];
-}
+import { CreateShiftPayload, UpdateShiftPayload } from '../../shared/types/shift.types';
 
 export class ShiftsService {
   async create(data: CreateShiftPayload) {
-    return prisma.turno.create({
-      data,
-    });
+    return prisma.turno.create({ data });
   }
 
   async findAll(page: number = 1, limit: number = 10, search?: string) {
@@ -51,21 +36,29 @@ export class ShiftsService {
   }
 
   async findById(id: string) {
-    return prisma.turno.findUnique({
-      where: { id },
-    });
+    return prisma.turno.findUnique({ where: { id } });
   }
 
   async update(id: string, data: UpdateShiftPayload) {
-    return prisma.turno.update({
-      where: { id },
-      data,
-    });
+    try {
+      return await prisma.turno.update({ where: { id }, data });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025') throw new Error('404:Turno não encontrado.');
+      }
+      throw error;
+    }
   }
 
   async delete(id: string) {
-    return prisma.turno.delete({
-      where: { id },
-    });
+    try {
+      return await prisma.turno.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025') throw new Error('404:Turno não encontrado.');
+        if (error.code === 'P2003') throw new Error('400:Não é possível excluir este turno pois existem usuários vinculados a ele.');
+      }
+      throw error;
+    }
   }
 }

@@ -40,53 +40,902 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+.husky/
+  commit-msg
+prisma/
+  migrations/
+    20260524180949_initial_schema/
+      migration.sql
+    20260524182854_sync_gin_indexes/
+      migration.sql
+    migration_lock.toml
+  schema.prisma
+  seed.ts
+src/
+  config/
+    scalar-config.ts
+    swagger.ts
+  lib/
+    prisma.ts
+    redis.ts
+  modules/
+    auth/
+      auth.controller.ts
+      auth.routes.ts
+      auth.service.ts
+    rooms/
+      rooms.controller.ts
+      rooms.routes.ts
+      rooms.service.ts
+    shifts/
+      shifts.controller.ts
+      shifts.routes.ts
+      shifts.service.ts
+    users/
+      users.controller.ts
+      users.routes.ts
+      users.service.ts
+  schemas/
+    auth.schema.ts
+    room.schema.ts
+    shift.schema.ts
+    user.schema.ts
+  shared/
+    middlewares/
+      auth.middleware.ts
+      error.middleware.ts
+      rate-limit.middleware.ts
+      role.middleware.ts
+      validate.middlewares.ts
+    types/
+      access-log.types.ts
+      auth.types.ts
+      device.types.ts
+      express.d.ts
+      index.ts
+      shift.types.ts
+      user.types.ts
+    utils/
+      device-key.ts
+      hash.ts
+      shift-validator.ts
+  app.ts
+  server.ts
 .commitlintrc.json
 .env.example
 .gitignore
-.husky/commit-msg
 docker-compose.yml
 LICENSE
 package.json
 prisma.config.ts
-prisma/migrations/20260524180949_initial_schema/migration.sql
-prisma/migrations/20260524182854_sync_gin_indexes/migration.sql
-prisma/migrations/migration_lock.toml
-prisma/schema.prisma
-prisma/seed.ts
 README.md
-src/app.ts
-src/config/scalar-config.ts
-src/config/swagger.ts
-src/lib/prisma.ts
-src/lib/redis.ts
-src/modules/auth/auth.controller.ts
-src/modules/auth/auth.routes.ts
-src/modules/auth/auth.service.ts
-src/modules/users/users.controller.ts
-src/modules/users/users.routes.ts
-src/modules/users/users.service.ts
-src/schemas/auth.schema.ts
-src/schemas/user.schema.ts
-src/server.ts
-src/shared/middlewares/auth.middleware.ts
-src/shared/middlewares/error.middleware.ts
-src/shared/middlewares/rate-limit.middleware.ts
-src/shared/middlewares/role.middleware.ts
-src/shared/middlewares/validate.middlewares.ts
-src/shared/types/access-log.types.ts
-src/shared/types/auth.types.ts
-src/shared/types/device.types.ts
-src/shared/types/express.d.ts
-src/shared/types/index.ts
-src/shared/types/user.types.ts
-src/shared/utils/device-key.ts
-src/shared/utils/hash.ts
-src/shared/utils/shift-validator.ts
 tsconfig.json
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="src/shared/types/shift.types.ts">
+export interface CreateShiftPayload {
+  nome: string;
+  horaInicio: number;
+  horaFim: number;
+  diasSemana: number[];
+}
+
+export interface UpdateShiftPayload {
+  nome?: string;
+  horaInicio?: number;
+  horaFim?: number;
+  diasSemana?: number[];
+}
+</file>
+
+<file path=".husky/commit-msg">
+npx --no -- commitlint --edit "$1"
+</file>
+
+<file path="prisma/migrations/20260524180949_initial_schema/migration.sql">
+-- Migration: initial_schema
+-- Schema completo do Syngate — tabelas, enums, índices e extensões numa migration só
+
+-- ─── Extensões ───────────────────────────────────────────────────────────────
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ─── Enums ───────────────────────────────────────────────────────────────────
+
+CREATE TYPE "PapelUsuario" AS ENUM (
+  'ALUNO',
+  'PROFESSOR',
+  'FUNCIONARIO',
+  'COORDENADOR',
+  'GESTOR',
+  'VISITANTE'
+);
+
+CREATE TYPE "TipoDispositivo" AS ENUM (
+  'CATRACA',
+  'LEITOR_CARTAO'
+);
+
+CREATE TYPE "StatusAcesso" AS ENUM (
+  'CONCEDIDO',
+  'NEGADO'
+);
+
+CREATE TYPE "FinalidadeLog" AS ENUM (
+  'ENTRADA_PREDIO',
+  'PRESENCA_SALA'
+);
+
+CREATE TYPE "DirecaoAcesso" AS ENUM (
+  'ENTRADA',
+  'SAIDA'
+);
+
+CREATE TYPE "StatusDispositivo" AS ENUM (
+  'ATIVO',
+  'INATIVO',
+  'MANUTENCAO'
+);
+
+CREATE TYPE "TipoToken" AS ENUM (
+  'CHAVE_API',
+  'REFRESH',
+  'APP'
+);
+
+-- ─── Tabelas ─────────────────────────────────────────────────────────────────
+
+CREATE TABLE "turnos" (
+  "id"         TEXT NOT NULL,
+  "nome"       TEXT NOT NULL,
+  "horaInicio" INTEGER NOT NULL,
+  "horaFim"    INTEGER NOT NULL,
+  "diasSemana" INTEGER[],
+  CONSTRAINT "turnos_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "usuarios" (
+  "id"               TEXT NOT NULL,
+  "nome"             TEXT NOT NULL,
+  "email"            TEXT NOT NULL,
+  "hashSenha"        TEXT NOT NULL,
+  "matricula"        TEXT,
+  "cartaoId"         TEXT,
+  "curso"            TEXT,
+  "papel"            "PapelUsuario" NOT NULL DEFAULT 'ALUNO',
+  "ativo"            BOOLEAN NOT NULL DEFAULT true,
+  "dataExpiracao"    TIMESTAMP(3),
+  "emailVerificado"  BOOLEAN NOT NULL DEFAULT false,
+  "tokenVerificacao" TEXT,
+  "turnoId"          TEXT,
+  "criadoEm"         TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "atualizadoEm"     TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "usuarios_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "tokens" (
+  "id"            TEXT NOT NULL,
+  "tipo"          "TipoToken" NOT NULL,
+  "hash"          TEXT NOT NULL,
+  "dataExpiracao" TIMESTAMP(3),
+  "revogado"      BOOLEAN NOT NULL DEFAULT false,
+  "usuarioId"     TEXT NOT NULL,
+  "criadoEm"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "tokens_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "salas" (
+  "id"    TEXT NOT NULL,
+  "nome"  TEXT NOT NULL,
+  "bloco" TEXT,
+  CONSTRAINT "salas_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "dispositivos" (
+  "id"                 TEXT NOT NULL,
+  "nome"               TEXT NOT NULL,
+  "tipo"               "TipoDispositivo"   NOT NULL DEFAULT 'LEITOR_CARTAO',
+  "status"             "StatusDispositivo" NOT NULL DEFAULT 'ATIVO',
+  "enderecoMac"        TEXT,
+  "hashChaveSeguranca" TEXT,
+  "ipLocal"            TEXT,
+  "salaId"             TEXT NOT NULL,
+  CONSTRAINT "dispositivos_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "logs_acesso" (
+  "id"            TEXT NOT NULL,
+  "dataHora"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "status"        "StatusAcesso" NOT NULL,
+  "finalidade"    "FinalidadeLog"   NOT NULL DEFAULT 'ENTRADA_PREDIO',
+  "direcao"       "DirecaoAcesso"   NOT NULL DEFAULT 'ENTRADA',
+  "motivo"        TEXT,
+  "usuarioId"     TEXT,
+  "uidCartao"     TEXT,
+  "dispositivoId" TEXT NOT NULL,
+  CONSTRAINT "logs_acesso_pkey" PRIMARY KEY ("id")
+);
+
+-- ─── Unique Constraints ───────────────────────────────────────────────────────
+
+CREATE UNIQUE INDEX "usuarios_email_key"            ON "usuarios"("email");
+CREATE UNIQUE INDEX "usuarios_matricula_key"         ON "usuarios"("matricula");
+CREATE UNIQUE INDEX "usuarios_cartaoId_key"          ON "usuarios"("cartaoId");
+CREATE UNIQUE INDEX "usuarios_tokenVerificacao_key"  ON "usuarios"("tokenVerificacao");
+CREATE UNIQUE INDEX "tokens_hash_key"                ON "tokens"("hash");
+CREATE UNIQUE INDEX "salas_nome_bloco_key"           ON "salas"("nome", "bloco");
+CREATE UNIQUE INDEX "dispositivos_enderecoMac_key"   ON "dispositivos"("enderecoMac");
+
+-- ─── Índices B-Tree (performance em filtros comuns) ───────────────────────────
+
+CREATE INDEX "tokens_usuarioId_idx"                    ON "tokens"("usuarioId");
+CREATE INDEX "logs_acesso_dataHora_idx"                ON "logs_acesso"("dataHora");
+CREATE INDEX "logs_acesso_usuarioId_dataHora_idx"      ON "logs_acesso"("usuarioId", "dataHora");
+CREATE INDEX "logs_acesso_dispositivoId_dataHora_idx"  ON "logs_acesso"("dispositivoId", "dataHora");
+CREATE INDEX "logs_acesso_usuarioId_status_idx"        ON "logs_acesso"("usuarioId", "status");
+
+-- ─── Índices GIN pg_trgm (buscas ILIKE performáticas) ────────────────────────
+
+CREATE INDEX "idx_usuarios_nome_trgm"  ON "usuarios" USING GIN ("nome"  gin_trgm_ops);
+CREATE INDEX "idx_usuarios_email_trgm" ON "usuarios" USING GIN ("email" gin_trgm_ops);
+
+-- ─── Foreign Keys ─────────────────────────────────────────────────────────────
+
+ALTER TABLE "usuarios" ADD CONSTRAINT "usuarios_turnoId_fkey"
+  FOREIGN KEY ("turnoId") REFERENCES "turnos"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE "tokens" ADD CONSTRAINT "tokens_usuarioId_fkey"
+  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
+  ON DELETE CASCADE ON UPDATE CASCADE;
+
+ALTER TABLE "dispositivos" ADD CONSTRAINT "dispositivos_salaId_fkey"
+  FOREIGN KEY ("salaId") REFERENCES "salas"("id")
+  ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_usuarioId_fkey"
+  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_dispositivoId_fkey"
+  FOREIGN KEY ("dispositivoId") REFERENCES "dispositivos"("id")
+  ON DELETE CASCADE ON UPDATE CASCADE;
+</file>
+
+<file path="prisma/migrations/20260524182854_sync_gin_indexes/migration.sql">
+-- RenameIndex
+ALTER INDEX "idx_usuarios_email_trgm" RENAME TO "usuarios_email_idx";
+
+-- RenameIndex
+ALTER INDEX "idx_usuarios_nome_trgm" RENAME TO "usuarios_nome_idx";
+</file>
+
+<file path="prisma/migrations/migration_lock.toml">
+# Please do not edit this file manually
+# It should be added in your version-control system (e.g., Git)
+provider = "postgresql"
+</file>
+
+<file path="src/config/scalar-config.ts">
+export const renderScalar = (openapiSpecification: any) => `
+  <!doctype html>
+  <html>
+    <head>
+      <title>Syngate API Reference</title>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <style>
+        body { margin: 0; }
+      </style>
+    </head>
+    <body>
+      <script
+        id="api-reference"
+        data-configuration='${JSON.stringify({
+          spec: { content: openapiSpecification },
+          theme: 'deepSpace',
+          layout: 'modern',
+        })}'></script>
+      <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+    </body>
+  </html>
+`;
+</file>
+
+<file path="src/lib/prisma.ts">
+import { PrismaClient } from '@prisma/client';
+import { Pool } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
+
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  throw new Error('[Erro Fatal] DATABASE_URL não definida no ambiente.');
+}
+
+const pool = new Pool({ connectionString });
+const adapter = new PrismaPg(pool);
+
+const globalForPrisma = global as unknown as { prisma: PrismaClient };
+
+export const prisma =
+  globalForPrisma.prisma ||
+  new PrismaClient({
+    adapter,
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma;
+}
+</file>
+
+<file path="src/lib/redis.ts">
+import { Redis } from 'ioredis';
+
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+
+const globalForRedis = global as unknown as { redis: Redis };
+
+export const redis =
+  globalForRedis.redis ||
+  new Redis(redisUrl, {
+    maxRetriesPerRequest: null,
+    retryStrategy(times) {
+      const delay = Math.min(times * 50, 2000);
+      return delay;
+    },
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForRedis.redis = redis;
+}
+
+redis.on('error', (err) => {
+  console.error('[Redis Error] Falha na conexão com o Redis:', err);
+});
+
+redis.on('connect', () => {
+  console.log('[Redis] Conectado com sucesso.');
+});
+</file>
+
+<file path="src/modules/rooms/rooms.controller.ts">
+import { Request, Response } from 'express';
+import { RoomsService } from './rooms.service';
+
+export class RoomsController {
+  private roomsService = new RoomsService();
+
+  create = async (req: Request, res: Response) => {
+    try {
+      const room = await this.roomsService.create(req.body);
+      return res.status(201).json({ status: 'success', data: room });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) {
+        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+
+  findAll = async (req: Request, res: Response) => {
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const search = req.query.search as string | undefined;
+
+    const result = await this.roomsService.findAll(page, limit, search);
+    
+    return res.status(200).json({
+      status: 'success',
+      data: result.data,
+      meta: result.meta
+    });
+  };
+
+  findById = async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    
+    const room = await this.roomsService.findById(id);
+    if (!room) return res.status(404).json({ status: 'error', message: 'Sala não encontrada.' });
+    
+    return res.status(200).json({ status: 'success', data: room });
+  };
+
+  update = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      
+      const room = await this.roomsService.update(id, req.body);
+      return res.status(200).json({ status: 'success', data: room });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) {
+        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      if (error.code === 'P2025') {
+        return res.status(404).json({ status: 'error', message: 'Sala não encontrada.' });
+      }
+      throw error;
+    }
+  };
+
+  delete = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      
+      await this.roomsService.delete(id);
+      return res.status(204).send();
+    } catch (error: any) {
+      if (error.code === 'P2003') {
+        return res.status(400).json({ 
+          status: 'error', 
+          message: 'Não é possível excluir esta sala pois existem dispositivos vinculados a ela.' 
+        });
+      }
+      if (error.code === 'P2025') {
+        return res.status(404).json({ status: 'error', message: 'Sala não encontrada.' });
+      }
+      throw error;
+    }
+  };
+}
+</file>
+
+<file path="src/modules/rooms/rooms.routes.ts">
+import { Router } from "express";
+import { RoomsController } from "./rooms.controller";
+import { authMiddleware } from "../../shared/middlewares/auth.middleware";
+import { roleMiddleware } from "../../shared/middlewares/role.middleware";
+import { validate } from "../../shared/middlewares/validate.middlewares";
+import { createRoomSchema, updateRoomSchema } from "../../schemas/room.schema";
+import { PapelUsuario } from "@prisma/client";
+
+const router = Router();
+const roomsController = new RoomsController();
+
+router.use(authMiddleware);
+
+router.get("/", roomsController.findAll);
+router.get("/:id", roomsController.findById);
+
+const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
+
+router.post(
+  "/",
+  roleMiddleware(adminRoles),
+  validate(createRoomSchema),
+  roomsController.create,
+);
+router.put(
+  "/:id",
+  roleMiddleware(adminRoles),
+  validate(updateRoomSchema),
+  roomsController.update,
+);
+router.delete("/:id", roleMiddleware(adminRoles), roomsController.delete);
+
+export { router as roomsRouter };
+</file>
+
+<file path="src/modules/rooms/rooms.service.ts">
+import { prisma } from '../../lib/prisma';
+import { Prisma } from '@prisma/client';
+
+export interface CreateRoomPayload {
+  nome: string;
+  bloco?: string;
+}
+
+export interface UpdateRoomPayload {
+  nome?: string;
+  bloco?: string | null;
+}
+
+export class RoomsService {
+  async create(data: CreateRoomPayload) {
+    try {
+      return await prisma.sala.create({
+        data,
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new Error('409:Já existe uma sala cadastrada com este nome neste bloco.');
+      }
+      throw error;
+    }
+  }
+
+  async findAll(page: number = 1, limit: number = 10, search?: string) {
+    const skip = (page - 1) * limit;
+
+    const whereClause = search
+      ? {
+          OR: [
+            { nome: { contains: search, mode: 'insensitive' as const } },
+            { bloco: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {};
+
+    const [total, salas] = await Promise.all([
+      prisma.sala.count({ where: whereClause }),
+      prisma.sala.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        orderBy: { nome: 'asc' },
+      }),
+    ]);
+
+    return {
+      data: salas,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async findById(id: string) {
+    return prisma.sala.findUnique({
+      where: { id },
+    });
+  }
+
+  async update(id: string, data: UpdateRoomPayload) {
+    try {
+      return await prisma.sala.update({
+        where: { id },
+        data,
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new Error('409:A alteração conflita com outra sala já existente neste bloco.');
+      }
+      throw error;
+    }
+  }
+
+  async delete(id: string) {
+    return prisma.sala.delete({
+      where: { id },
+    });
+  }
+}
+</file>
+
+<file path="src/modules/shifts/shifts.controller.ts">
+import { Request, Response } from 'express';
+import { ShiftsService } from './shifts.service';
+
+export class ShiftsController {
+  private shiftsService = new ShiftsService();
+
+  create = async (req: Request, res: Response) => {
+    const shift = await this.shiftsService.create(req.body);
+    return res.status(201).json({ status: 'success', data: shift });
+  };
+
+  findAll = async (req: Request, res: Response) => {
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const search = req.query.search as string | undefined;
+
+    const result = await this.shiftsService.findAll(page, limit, search);
+    
+    return res.status(200).json({
+      status: 'success',
+      data: result.data,
+      meta: result.meta
+    });
+  };
+
+  findById = async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    
+    const shift = await this.shiftsService.findById(id);
+    if (!shift) return res.status(404).json({ status: 'error', message: 'Turno não encontrado.' });
+    
+    return res.status(200).json({ status: 'success', data: shift });
+  };
+
+  update = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const shift = await this.shiftsService.update(id, req.body);
+      return res.status(200).json({ status: 'success', data: shift });
+    } catch (error: any) {
+      if (error.message.startsWith('404:')) {
+        return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+
+  delete = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      await this.shiftsService.delete(id);
+      return res.status(204).send();
+    } catch (error: any) {
+      if (error.message.startsWith('400:')) {
+        return res.status(400).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      if (error.message.startsWith('404:')) {
+        return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+}
+</file>
+
+<file path="src/modules/shifts/shifts.routes.ts">
+import { Router } from 'express';
+import { ShiftsController } from './shifts.controller';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
+import { roleMiddleware } from '../../shared/middlewares/role.middleware';
+import { validate } from '../../shared/middlewares/validate.middlewares';
+import { createShiftSchema, updateShiftSchema } from '../../schemas/shift.schema';
+import { PapelUsuario } from '@prisma/client';
+
+const router = Router();
+const shiftsController = new ShiftsController();
+
+router.use(authMiddleware);
+
+router.get('/', shiftsController.findAll);
+router.get('/:id', shiftsController.findById);
+
+const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
+
+router.post('/', roleMiddleware(adminRoles), validate(createShiftSchema), shiftsController.create);
+router.put('/:id', roleMiddleware(adminRoles), validate(updateShiftSchema), shiftsController.update);
+router.delete('/:id', roleMiddleware(adminRoles), shiftsController.delete);
+
+export { router as shiftsRouter };
+</file>
+
+<file path="src/modules/shifts/shifts.service.ts">
+import { prisma } from '../../lib/prisma';
+import { Prisma } from '@prisma/client';
+
+export interface CreateShiftPayload {
+  nome: string;
+  horaInicio: number;
+  horaFim: number;
+  diasSemana: number[];
+}
+
+export interface UpdateShiftPayload {
+  nome?: string;
+  horaInicio?: number;
+  horaFim?: number;
+  diasSemana?: number[];
+}
+
+export class ShiftsService {
+  async create(data: CreateShiftPayload) {
+    return prisma.turno.create({
+      data,
+    });
+  }
+
+  async findAll(page: number = 1, limit: number = 10, search?: string) {
+    const skip = (page - 1) * limit;
+
+    const whereClause = search
+      ? { nome: { contains: search, mode: 'insensitive' as const } }
+      : {};
+
+    const [total, turnos] = await Promise.all([
+      prisma.turno.count({ where: whereClause }),
+      prisma.turno.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        orderBy: { nome: 'asc' },
+      }),
+    ]);
+
+    return {
+      data: turnos,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async findById(id: string) {
+    return prisma.turno.findUnique({
+      where: { id },
+    });
+  }
+
+  async update(id: string, data: UpdateShiftPayload) {
+    return prisma.turno.update({
+      where: { id },
+      data,
+    });
+  }
+
+  async delete(id: string) {
+    return prisma.turno.delete({
+      where: { id },
+    });
+  }
+}
+</file>
+
+<file path="src/modules/users/users.controller.ts">
+import { Request, Response } from 'express';
+import { UsersService } from './users.service';
+
+export class UsersController {
+  private usersService = new UsersService();
+
+  create = async (req: Request, res: Response) => {
+    try {
+      const user = await this.usersService.create(req.body);
+      return res.status(201).json({ status: 'success', data: user });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) {
+        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+
+  findAll = async (req: Request, res: Response) => {
+    const page = Number(req.query.page);
+    const limit = Number(req.query.limit);
+    const search = req.query.search as string | undefined;
+
+    const result = await this.usersService.findAll(page, limit, search);
+    
+    return res.status(200).json({
+      status: 'success',
+      data: result.data,
+      meta: result.meta
+    });
+  };
+
+  getProfile = async (req: Request, res: Response) => {
+    const userId = req.user!.sub;
+    const user = await this.usersService.findById(userId);
+    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
+    return res.status(200).json({ status: 'success', data: user });
+  };
+
+  findById = async (req: Request, res: Response) => {
+    const id = req.params.id as string; 
+    const user = await this.usersService.findById(id);
+    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
+    return res.status(200).json({ status: 'success', data: user });
+  };
+
+  update = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const user = await this.usersService.update(id, req.body);
+      return res.status(200).json({ status: 'success', data: user });
+    } catch (error) {
+      return res.status(400).json({ status: 'error', message: 'Erro ao atualizar usuário.' });
+    }
+  };
+
+  delete = async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    await this.usersService.softDelete(id);
+    return res.status(204).send();
+  };
+
+  linkCard = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const user = await this.usersService.linkCard(id, req.body.cartaoId);
+      return res.status(200).json({ status: 'success', data: user });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) {
+        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+}
+</file>
+
+<file path="src/schemas/auth.schema.ts">
+import { z } from 'zod';
+import { PapelUsuario } from '@prisma/client';
+
+export const loginSchema = z.object({
+  body: z.object({
+    email: z.string().email('Formato de e-mail inválido.'),
+    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
+  }),
+});
+
+export const cadastroSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres.'),
+    email: z.string().email('Formato de e-mail inválido.'),
+    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
+    papel: z.nativeEnum(PapelUsuario).optional(),
+  }),
+});
+
+export const refreshTokenSchema = z.object({
+  body: z.object({
+    refreshToken: z.string().min(1, 'Refresh token é obrigatório.'),
+  }),
+});
+</file>
+
+<file path="src/schemas/room.schema.ts">
+import { z } from 'zod';
+
+export const createRoomSchema = z.object({
+  body: z.object({
+    nome: z.string().min(2, 'O nome da sala deve ter no mínimo 2 caracteres.'),
+    bloco: z.string().optional(),
+  }),
+});
+
+export const updateRoomSchema = z.object({
+  body: z.object({
+    nome: z.string().min(2).optional(),
+    bloco: z.string().nullable().optional(),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('ID da sala inválida.'),
+  }),
+});
+</file>
+
+<file path="src/schemas/shift.schema.ts">
+import { z } from 'zod';
+
+export const createShiftSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3, 'O nome do turno deve ter no mínimo 3 caracteres.'),
+    horaInicio: z.number()
+      .int('A hora de início deve ser um número inteiro.')
+      .min(0, 'Minutos não podem ser negativos.')
+      .max(1439, 'Minutos não podem exceder 1439 (23:59).'),
+    horaFim: z.number()
+      .int('A hora de fim deve ser um número inteiro.')
+      .min(0, 'Minutos não podem ser negativos.')
+      .max(1439, 'Minutos não podem exceder 1439 (23:59).'),
+    diasSemana: z.array(
+      z.number()
+        .int()
+        .min(0, 'O dia da semana deve ser 0 (Domingo) a 6 (Sábado).')
+        .max(6, 'O dia da semana deve ser 0 (Domingo) a 6 (Sábado).')
+    ).min(1, 'O turno deve ter pelo menos um dia da semana.'),
+  }),
+});
+
+export const updateShiftSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3).optional(),
+    horaInicio: z.number().int().min(0).max(1439).optional(),
+    horaFim: z.number().int().min(0).max(1439).optional(),
+    diasSemana: z.array(z.number().int().min(0).max(6)).min(1).optional(),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('ID do turno inválido.'),
+  }),
+});
+</file>
 
 <file path="src/shared/middlewares/auth.middleware.ts">
 import { Request, Response, NextFunction } from 'express';
@@ -401,10 +1250,6 @@ export function isWithinShift(date: Date, turno: Turno): boolean {
 { "extends": ["@commitlint/config-conventional"] }
 </file>
 
-<file path=".husky/commit-msg">
-npx --no -- commitlint --edit "$1"
-</file>
-
 <file path="LICENSE">
 MIT License
 
@@ -429,381 +1274,189 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 </file>
 
-<file path="prisma/migrations/20260524180949_initial_schema/migration.sql">
--- Migration: initial_schema
--- Schema completo do Syngate — tabelas, enums, índices e extensões numa migration só
-
--- ─── Extensões ───────────────────────────────────────────────────────────────
-
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
--- ─── Enums ───────────────────────────────────────────────────────────────────
-
-CREATE TYPE "PapelUsuario" AS ENUM (
-  'ALUNO',
-  'PROFESSOR',
-  'FUNCIONARIO',
-  'COORDENADOR',
-  'GESTOR',
-  'VISITANTE'
-);
-
-CREATE TYPE "TipoDispositivo" AS ENUM (
-  'CATRACA',
-  'LEITOR_CARTAO'
-);
-
-CREATE TYPE "StatusAcesso" AS ENUM (
-  'CONCEDIDO',
-  'NEGADO'
-);
-
-CREATE TYPE "FinalidadeLog" AS ENUM (
-  'ENTRADA_PREDIO',
-  'PRESENCA_SALA'
-);
-
-CREATE TYPE "DirecaoAcesso" AS ENUM (
-  'ENTRADA',
-  'SAIDA'
-);
-
-CREATE TYPE "StatusDispositivo" AS ENUM (
-  'ATIVO',
-  'INATIVO',
-  'MANUTENCAO'
-);
-
-CREATE TYPE "TipoToken" AS ENUM (
-  'CHAVE_API',
-  'REFRESH',
-  'APP'
-);
-
--- ─── Tabelas ─────────────────────────────────────────────────────────────────
-
-CREATE TABLE "turnos" (
-  "id"         TEXT NOT NULL,
-  "nome"       TEXT NOT NULL,
-  "horaInicio" INTEGER NOT NULL,
-  "horaFim"    INTEGER NOT NULL,
-  "diasSemana" INTEGER[],
-  CONSTRAINT "turnos_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "usuarios" (
-  "id"               TEXT NOT NULL,
-  "nome"             TEXT NOT NULL,
-  "email"            TEXT NOT NULL,
-  "hashSenha"        TEXT NOT NULL,
-  "matricula"        TEXT,
-  "cartaoId"         TEXT,
-  "curso"            TEXT,
-  "papel"            "PapelUsuario" NOT NULL DEFAULT 'ALUNO',
-  "ativo"            BOOLEAN NOT NULL DEFAULT true,
-  "dataExpiracao"    TIMESTAMP(3),
-  "emailVerificado"  BOOLEAN NOT NULL DEFAULT false,
-  "tokenVerificacao" TEXT,
-  "turnoId"          TEXT,
-  "criadoEm"         TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "atualizadoEm"     TIMESTAMP(3) NOT NULL,
-  CONSTRAINT "usuarios_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "tokens" (
-  "id"            TEXT NOT NULL,
-  "tipo"          "TipoToken" NOT NULL,
-  "hash"          TEXT NOT NULL,
-  "dataExpiracao" TIMESTAMP(3),
-  "revogado"      BOOLEAN NOT NULL DEFAULT false,
-  "usuarioId"     TEXT NOT NULL,
-  "criadoEm"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "tokens_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "salas" (
-  "id"    TEXT NOT NULL,
-  "nome"  TEXT NOT NULL,
-  "bloco" TEXT,
-  CONSTRAINT "salas_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "dispositivos" (
-  "id"                 TEXT NOT NULL,
-  "nome"               TEXT NOT NULL,
-  "tipo"               "TipoDispositivo"   NOT NULL DEFAULT 'LEITOR_CARTAO',
-  "status"             "StatusDispositivo" NOT NULL DEFAULT 'ATIVO',
-  "enderecoMac"        TEXT,
-  "hashChaveSeguranca" TEXT,
-  "ipLocal"            TEXT,
-  "salaId"             TEXT NOT NULL,
-  CONSTRAINT "dispositivos_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "logs_acesso" (
-  "id"            TEXT NOT NULL,
-  "dataHora"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "status"        "StatusAcesso" NOT NULL,
-  "finalidade"    "FinalidadeLog"   NOT NULL DEFAULT 'ENTRADA_PREDIO',
-  "direcao"       "DirecaoAcesso"   NOT NULL DEFAULT 'ENTRADA',
-  "motivo"        TEXT,
-  "usuarioId"     TEXT,
-  "uidCartao"     TEXT,
-  "dispositivoId" TEXT NOT NULL,
-  CONSTRAINT "logs_acesso_pkey" PRIMARY KEY ("id")
-);
-
--- ─── Unique Constraints ───────────────────────────────────────────────────────
-
-CREATE UNIQUE INDEX "usuarios_email_key"            ON "usuarios"("email");
-CREATE UNIQUE INDEX "usuarios_matricula_key"         ON "usuarios"("matricula");
-CREATE UNIQUE INDEX "usuarios_cartaoId_key"          ON "usuarios"("cartaoId");
-CREATE UNIQUE INDEX "usuarios_tokenVerificacao_key"  ON "usuarios"("tokenVerificacao");
-CREATE UNIQUE INDEX "tokens_hash_key"                ON "tokens"("hash");
-CREATE UNIQUE INDEX "salas_nome_bloco_key"           ON "salas"("nome", "bloco");
-CREATE UNIQUE INDEX "dispositivos_enderecoMac_key"   ON "dispositivos"("enderecoMac");
-
--- ─── Índices B-Tree (performance em filtros comuns) ───────────────────────────
-
-CREATE INDEX "tokens_usuarioId_idx"                    ON "tokens"("usuarioId");
-CREATE INDEX "logs_acesso_dataHora_idx"                ON "logs_acesso"("dataHora");
-CREATE INDEX "logs_acesso_usuarioId_dataHora_idx"      ON "logs_acesso"("usuarioId", "dataHora");
-CREATE INDEX "logs_acesso_dispositivoId_dataHora_idx"  ON "logs_acesso"("dispositivoId", "dataHora");
-CREATE INDEX "logs_acesso_usuarioId_status_idx"        ON "logs_acesso"("usuarioId", "status");
-
--- ─── Índices GIN pg_trgm (buscas ILIKE performáticas) ────────────────────────
-
-CREATE INDEX "idx_usuarios_nome_trgm"  ON "usuarios" USING GIN ("nome"  gin_trgm_ops);
-CREATE INDEX "idx_usuarios_email_trgm" ON "usuarios" USING GIN ("email" gin_trgm_ops);
-
--- ─── Foreign Keys ─────────────────────────────────────────────────────────────
-
-ALTER TABLE "usuarios" ADD CONSTRAINT "usuarios_turnoId_fkey"
-  FOREIGN KEY ("turnoId") REFERENCES "turnos"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
-
-ALTER TABLE "tokens" ADD CONSTRAINT "tokens_usuarioId_fkey"
-  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
-  ON DELETE CASCADE ON UPDATE CASCADE;
-
-ALTER TABLE "dispositivos" ADD CONSTRAINT "dispositivos_salaId_fkey"
-  FOREIGN KEY ("salaId") REFERENCES "salas"("id")
-  ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_usuarioId_fkey"
-  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
-
-ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_dispositivoId_fkey"
-  FOREIGN KEY ("dispositivoId") REFERENCES "dispositivos"("id")
-  ON DELETE CASCADE ON UPDATE CASCADE;
-</file>
-
-<file path="prisma/migrations/20260524182854_sync_gin_indexes/migration.sql">
--- RenameIndex
-ALTER INDEX "idx_usuarios_email_trgm" RENAME TO "usuarios_email_idx";
-
--- RenameIndex
-ALTER INDEX "idx_usuarios_nome_trgm" RENAME TO "usuarios_nome_idx";
-</file>
-
-<file path="prisma/migrations/migration_lock.toml">
-# Please do not edit this file manually
-# It should be added in your version-control system (e.g., Git)
-provider = "postgresql"
-</file>
-
 <file path="README.md">
 
 </file>
 
-<file path="src/config/scalar-config.ts">
-export const renderScalar = (openapiSpecification: any) => `
-  <!doctype html>
-  <html>
-    <head>
-      <title>Syngate API Reference</title>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <style>
-        body { margin: 0; }
-      </style>
-    </head>
-    <body>
-      <script
-        id="api-reference"
-        data-configuration='${JSON.stringify({
-          spec: { content: openapiSpecification },
-          theme: 'deepSpace',
-          layout: 'modern',
-        })}'></script>
-      <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-    </body>
-  </html>
-`;
-</file>
-
-<file path="src/lib/prisma.ts">
-import { PrismaClient } from '@prisma/client';
-import { Pool } from 'pg';
-import { PrismaPg } from '@prisma/adapter-pg';
-
-const connectionString = process.env.DATABASE_URL;
-
-if (!connectionString) {
-  throw new Error('[Erro Fatal] DATABASE_URL não definida no ambiente.');
-}
-
-const pool = new Pool({ connectionString });
-const adapter = new PrismaPg(pool);
-
-const globalForPrisma = global as unknown as { prisma: PrismaClient };
-
-export const prisma =
-  globalForPrisma.prisma ||
-  new PrismaClient({
-    adapter,
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-  });
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = prisma;
-}
-</file>
-
-<file path="src/lib/redis.ts">
-import { Redis } from 'ioredis';
-
-const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-
-const globalForRedis = global as unknown as { redis: Redis };
-
-export const redis =
-  globalForRedis.redis ||
-  new Redis(redisUrl, {
-    maxRetriesPerRequest: null,
-    retryStrategy(times) {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForRedis.redis = redis;
-}
-
-redis.on('error', (err) => {
-  console.error('[Redis Error] Falha na conexão com o Redis:', err);
-});
-
-redis.on('connect', () => {
-  console.log('[Redis] Conectado com sucesso.');
-});
-</file>
-
-<file path="src/modules/users/users.controller.ts">
+<file path="src/modules/auth/auth.controller.ts">
 import { Request, Response } from 'express';
-import { UsersService } from './users.service';
+import { AuthService } from './auth.service';
 
-export class UsersController {
-  private usersService = new UsersService();
+export class AuthController {
+  private authService = new AuthService();
 
-  create = async (req: Request, res: Response) => {
+  login = async (req: Request, res: Response) => {
+    const { email, senha } = req.body;
+
     try {
-      const user = await this.usersService.create(req.body);
-      return res.status(201).json({ status: 'success', data: user });
+      const tokens = await this.authService.login({ email, senhaLimpa: senha });
+      return res.status(200).json({ status: 'success', data: tokens });
     } catch (error: any) {
-      if (error.message.startsWith('409:')) {
-        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      if (error.message === 'E-mail não verificado.') {
+        return res.status(403).json({ status: 'error', message: error.message });
       }
-      throw error;
+      return res.status(401).json({ status: 'error', message: 'Credenciais inválidas.' });
     }
   };
 
-  findAll = async (req: Request, res: Response) => {
-    const page = Number(req.query.page);
-    const limit = Number(req.query.limit);
-    const search = req.query.search as string | undefined;
-
-    const result = await this.usersService.findAll(page, limit, search);
-    
-    return res.status(200).json({
-      status: 'success',
-      data: result.data,
-      meta: result.meta
-    });
-  };
-
-  getProfile = async (req: Request, res: Response) => {
-    const userId = req.user!.sub;
-    const user = await this.usersService.findById(userId);
-    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
-    return res.status(200).json({ status: 'success', data: user });
-  };
-
-  findById = async (req: Request, res: Response) => {
-    const id = req.params.id as string; 
-    const user = await this.usersService.findById(id);
-    if (!user) return res.status(404).json({ status: 'error', message: 'Usuário não encontrado.' });
-    return res.status(200).json({ status: 'success', data: user });
-  };
-
-  update = async (req: Request, res: Response) => {
+  cadastro = async (req: Request, res: Response) => {
     try {
-      const id = req.params.id as string;
-      const user = await this.usersService.update(id, req.body);
-      return res.status(200).json({ status: 'success', data: user });
-    } catch (error) {
-      return res.status(400).json({ status: 'error', message: 'Erro ao atualizar usuário.' });
+      const resultado = await this.authService.cadastro(req.body);
+      return res.status(201).json({ status: 'success', data: resultado });
+    } catch (error: any) {
+      return res.status(400).json({ status: 'error', message: error.message });
     }
   };
 
-  delete = async (req: Request, res: Response) => {
-    const id = req.params.id as string;
-    await this.usersService.softDelete(id);
+  verificarEmail = async (req: Request, res: Response) => {
+    const { token } = req.query;
+
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ status: 'error', message: 'Token de verificação ausente ou inválido.' });
+    }
+
+    try {
+      const resultado = await this.authService.verificarEmail(token);
+      return res.status(200).json({ status: 'success', data: resultado });
+    } catch (error: any) {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
+  };
+
+  refresh = async (req: Request, res: Response) => {
+    const { refreshToken } = req.body;
+    try {
+      const tokens = await this.authService.refreshToken(refreshToken);
+      return res.status(200).json({ status: 'success', data: tokens });
+    } catch (error: any) {
+      return res.status(401).json({ status: 'error', message: 'Sessão expirada. Faça login novamente.' });
+    }
+  };
+
+  logout = async (req: Request, res: Response) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+      const token = authHeader.split(' ')[1];
+      await this.authService.logout(token);
+    }
     return res.status(204).send();
   };
-
-  linkCard = async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id as string;
-      const user = await this.usersService.linkCard(id, req.body.cartaoId);
-      return res.status(200).json({ status: 'success', data: user });
-    } catch (error: any) {
-      if (error.message.startsWith('409:')) {
-        return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
-      }
-      throw error;
-    }
-  };
 }
 </file>
 
-<file path="src/schemas/auth.schema.ts">
+<file path="src/modules/auth/auth.routes.ts">
+import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
+import { redis } from '../../lib/redis';
+import { validate } from '../../middlewares/validate.middlewares';
+import { loginSchema, cadastroSchema, refreshTokenSchema } from '../../schemas/auth.schema';
+import { AuthController } from './auth.controller';
+import { authMiddleware } from '../../middlewares/auth.middleware';
+
+const router = Router();
+const authController = new AuthController();
+
+const authRateLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: async (...args: string[]) => {
+      const [command, ...rest] = args;
+      return redis.call(command, ...rest) as any;
+    },
+    prefix: 'rl:auth:',
+  }),
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: { status: 'error', message: 'Muitas tentativas. Aguarde 15 minutos.' },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+
+router.post('/login',          authRateLimiter, validate(loginSchema),        authController.login);
+router.post('/cadastro',       authRateLimiter, validate(cadastroSchema),     authController.cadastro);
+router.get( '/verificar-email',                                                authController.verificarEmail);
+router.post('/refresh',                         validate(refreshTokenSchema), authController.refresh);
+router.post('/logout',         authMiddleware,                                 authController.logout);
+
+export { router as authRouter };
+</file>
+
+<file path="src/schemas/user.schema.ts">
 import { z } from 'zod';
 import { PapelUsuario } from '@prisma/client';
 
-export const loginSchema = z.object({
-  body: z.object({
-    email: z.string().email('Formato de e-mail inválido.'),
-    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
-  }),
-});
-
-export const cadastroSchema = z.object({
+export const createUserSchema = z.object({
   body: z.object({
     nome: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres.'),
     email: z.string().email('Formato de e-mail inválido.'),
-    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
-    papel: z.nativeEnum(PapelUsuario).optional(),
+    senha: z.string().min(6, 'A senha deve ter no mínimo 6 caracteres.'),
+    matricula: z.string().optional(),
+    curso: z.string().optional(),
+    papel: z.nativeEnum(PapelUsuario).default(PapelUsuario.ALUNO),
+    turnoId: z.string().uuid('ID do turno inválido.').optional(),
   }),
 });
 
-export const refreshTokenSchema = z.object({
+export const updateUserSchema = z.object({
   body: z.object({
-    refreshToken: z.string().min(1, 'Refresh token é obrigatório.'),
+    nome: z.string().min(3).optional(),
+    email: z.string().email().optional(),
+    matricula: z.string().optional(),
+    curso: z.string().optional(),
+    papel: z.nativeEnum(PapelUsuario).optional(),
+    turnoId: z.string().uuid().optional(),
+    ativo: z.boolean().optional(),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('ID de usuário inválido.'),
   }),
 });
+
+export const linkCardSchema = z.object({
+  body: z.object({
+    cartaoId: z.string().min(1, 'O UID do cartão é obrigatório.').nullable(),
+  }),
+  params: z.object({
+    id: z.string().uuid('ID de usuário inválido.'),
+  }),
+});
+
+export const listUsersSchema = z.object({
+  query: z.object({
+    page: z.coerce.number().min(1, 'A página deve ser maior que 0.').default(1),
+    limit: z.coerce.number().min(1).max(100, 'O limite máximo é 100 itens por página.').default(10),
+    search: z.string().optional(),
+  }),
+});
+</file>
+
+<file path="src/server.ts">
+import 'dotenv/config';
+import { app } from './app';
+import { prisma } from './lib/prisma';
+
+console.log('[Debug] Iniciando script de ignição...');
+
+const PORT = process.env.PORT || 3333;
+
+async function bootstrap() {
+  try {
+    console.log('[Debug] Tentando conectar ao Banco de Dados...');
+    
+    await prisma.$connect();
+    console.log('Successfully connected to Database via Prisma');
+
+    app.listen(PORT, () => {
+      console.log(`Syngate Backend running on http://localhost:${PORT}`);
+    });
+  } catch (error) {
+    console.error('[Erro Fatal] Falha ao iniciar o servidor:', error);
+    await prisma.$disconnect();
+    process.exit(1);
+  }
+}
+
+bootstrap();
 </file>
 
 <file path=".gitignore">
@@ -1134,244 +1787,6 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-</file>
-
-<file path="src/modules/auth/auth.controller.ts">
-import { Request, Response } from 'express';
-import { AuthService } from './auth.service';
-
-export class AuthController {
-  private authService = new AuthService();
-
-  login = async (req: Request, res: Response) => {
-    const { email, senha } = req.body;
-
-    try {
-      const tokens = await this.authService.login({ email, senhaLimpa: senha });
-      return res.status(200).json({ status: 'success', data: tokens });
-    } catch (error: any) {
-      if (error.message === 'E-mail não verificado.') {
-        return res.status(403).json({ status: 'error', message: error.message });
-      }
-      return res.status(401).json({ status: 'error', message: 'Credenciais inválidas.' });
-    }
-  };
-
-  cadastro = async (req: Request, res: Response) => {
-    try {
-      const resultado = await this.authService.cadastro(req.body);
-      return res.status(201).json({ status: 'success', data: resultado });
-    } catch (error: any) {
-      return res.status(400).json({ status: 'error', message: error.message });
-    }
-  };
-
-  verificarEmail = async (req: Request, res: Response) => {
-    const { token } = req.query;
-
-    if (!token || typeof token !== 'string') {
-      return res.status(400).json({ status: 'error', message: 'Token de verificação ausente ou inválido.' });
-    }
-
-    try {
-      const resultado = await this.authService.verificarEmail(token);
-      return res.status(200).json({ status: 'success', data: resultado });
-    } catch (error: any) {
-      return res.status(400).json({ status: 'error', message: error.message });
-    }
-  };
-
-  refresh = async (req: Request, res: Response) => {
-    const { refreshToken } = req.body;
-    try {
-      const tokens = await this.authService.refreshToken(refreshToken);
-      return res.status(200).json({ status: 'success', data: tokens });
-    } catch (error: any) {
-      return res.status(401).json({ status: 'error', message: 'Sessão expirada. Faça login novamente.' });
-    }
-  };
-
-  logout = async (req: Request, res: Response) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader) {
-      const token = authHeader.split(' ')[1];
-      await this.authService.logout(token);
-    }
-    return res.status(204).send();
-  };
-}
-</file>
-
-<file path="src/modules/auth/auth.routes.ts">
-import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
-import { RedisStore } from 'rate-limit-redis';
-import { redis } from '../../lib/redis';
-import { validate } from '../../middlewares/validate.middlewares';
-import { loginSchema, cadastroSchema, refreshTokenSchema } from '../../schemas/auth.schema';
-import { AuthController } from './auth.controller';
-import { authMiddleware } from '../../middlewares/auth.middleware';
-
-const router = Router();
-const authController = new AuthController();
-
-const authRateLimiter = rateLimit({
-  store: new RedisStore({
-    sendCommand: async (...args: string[]) => {
-      const [command, ...rest] = args;
-      return redis.call(command, ...rest) as any;
-    },
-    prefix: 'rl:auth:',
-  }),
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  message: { status: 'error', message: 'Muitas tentativas. Aguarde 15 minutos.' },
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-});
-
-router.post('/login',          authRateLimiter, validate(loginSchema),        authController.login);
-router.post('/cadastro',       authRateLimiter, validate(cadastroSchema),     authController.cadastro);
-router.get( '/verificar-email',                                                authController.verificarEmail);
-router.post('/refresh',                         validate(refreshTokenSchema), authController.refresh);
-router.post('/logout',         authMiddleware,                                 authController.logout);
-
-export { router as authRouter };
-</file>
-
-<file path="src/modules/users/users.routes.ts">
-import { Router } from 'express';
-import { UsersController } from './users.controller';
-import { authMiddleware } from '../../shared/middlewares/auth.middleware';
-import { roleMiddleware } from '../../shared/middlewares/role.middleware';
-import { validate } from '../../shared/middlewares/validate.middlewares';
-import { 
-  createUserSchema, 
-  updateUserSchema, 
-  linkCardSchema, 
-  listUsersSchema 
-} from '../../schemas/user.schema';
-import { PapelUsuario } from '@prisma/client';
-
-const router = Router();
-const usersController = new UsersController();
-
-router.use(authMiddleware);
-
-router.get('/me', usersController.getProfile);
-
-const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
-router.use(roleMiddleware(adminRoles));
-
-router.post('/', validate(createUserSchema), usersController.create);
-router.get('/', validate(listUsersSchema), usersController.findAll);
-router.get('/:id', usersController.findById);
-router.put('/:id', validate(updateUserSchema), usersController.update);
-router.delete('/:id', usersController.delete);
-router.patch('/:id/cartao', validate(linkCardSchema), usersController.linkCard);
-
-export { router as usersRouter };
-</file>
-
-<file path="src/schemas/user.schema.ts">
-import { z } from 'zod';
-import { PapelUsuario } from '@prisma/client';
-
-export const createUserSchema = z.object({
-  body: z.object({
-    nome: z.string().min(3, 'O nome deve ter no mínimo 3 caracteres.'),
-    email: z.string().email('Formato de e-mail inválido.'),
-    senha: z.string().min(6, 'A senha deve ter no mínimo 6 caracteres.'),
-    matricula: z.string().optional(),
-    curso: z.string().optional(),
-    papel: z.nativeEnum(PapelUsuario).default(PapelUsuario.ALUNO),
-    turnoId: z.string().uuid('ID do turno inválido.').optional(),
-  }),
-});
-
-export const updateUserSchema = z.object({
-  body: z.object({
-    nome: z.string().min(3).optional(),
-    email: z.string().email().optional(),
-    matricula: z.string().optional(),
-    curso: z.string().optional(),
-    papel: z.nativeEnum(PapelUsuario).optional(),
-    turnoId: z.string().uuid().optional(),
-    ativo: z.boolean().optional(),
-  }).strict(),
-  params: z.object({
-    id: z.string().uuid('ID de usuário inválido.'),
-  }),
-});
-
-export const linkCardSchema = z.object({
-  body: z.object({
-    cartaoId: z.string().min(1, 'O UID do cartão é obrigatório.').nullable(),
-  }),
-  params: z.object({
-    id: z.string().uuid('ID de usuário inválido.'),
-  }),
-});
-
-export const listUsersSchema = z.object({
-  query: z.object({
-    page: z.coerce.number().min(1, 'A página deve ser maior que 0.').default(1),
-    limit: z.coerce.number().min(1).max(100, 'O limite máximo é 100 itens por página.').default(10),
-    search: z.string().optional(),
-  }),
-});
-</file>
-
-<file path="src/server.ts">
-import 'dotenv/config';
-import { app } from './app';
-import { prisma } from './lib/prisma';
-
-console.log('[Debug] Iniciando script de ignição...');
-
-const PORT = process.env.PORT || 3333;
-
-async function bootstrap() {
-  try {
-    console.log('[Debug] Tentando conectar ao Banco de Dados...');
-    
-    await prisma.$connect();
-    console.log('Successfully connected to Database via Prisma');
-
-    app.listen(PORT, () => {
-      console.log(`Syngate Backend running on http://localhost:${PORT}`);
-    });
-  } catch (error) {
-    console.error('[Erro Fatal] Falha ao iniciar o servidor:', error);
-    await prisma.$disconnect();
-    process.exit(1);
-  }
-}
-
-bootstrap();
-</file>
-
-<file path="tsconfig.json">
-{
-  "compilerOptions": {
-    "target": "es2022",
-    "module": "Node16",
-    "rootDir": "./",
-    "outDir": "./dist",
-    "moduleResolution": "Node16",
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "strict": true,
-    "skipLibCheck": true,
-    "types": ["node"] 
-  },
-  "include": [
-  "src/**/*",
-  "prisma/**/*",
-  "prisma.config.ts",
-  ],
-  "exclude": ["node_modules", "dist"]
-}
 </file>
 
 <file path="src/config/swagger.ts">
@@ -1847,6 +2262,63 @@ export const openapiSpecification = {
 };
 </file>
 
+<file path="src/modules/users/users.routes.ts">
+import { Router } from 'express';
+import { UsersController } from './users.controller';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
+import { roleMiddleware } from '../../shared/middlewares/role.middleware';
+import { validate } from '../../shared/middlewares/validate.middlewares';
+import { 
+  createUserSchema, 
+  updateUserSchema, 
+  linkCardSchema, 
+  listUsersSchema 
+} from '../../schemas/user.schema';
+import { PapelUsuario } from '@prisma/client';
+
+const router = Router();
+const usersController = new UsersController();
+
+router.use(authMiddleware);
+
+router.get('/me', usersController.getProfile);
+
+const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
+router.use(roleMiddleware(adminRoles));
+
+router.post('/', validate(createUserSchema), usersController.create);
+router.get('/', validate(listUsersSchema), usersController.findAll);
+router.get('/:id', usersController.findById);
+router.put('/:id', validate(updateUserSchema), usersController.update);
+router.delete('/:id', usersController.delete);
+router.patch('/:id/cartao', validate(linkCardSchema), usersController.linkCard);
+
+export { router as usersRouter };
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "Node16",
+    "rootDir": "./",
+    "outDir": "./dist",
+    "moduleResolution": "Node16",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"] 
+  },
+  "include": [
+  "src/**/*",
+  "prisma/**/*",
+  "prisma.config.ts",
+  ],
+  "exclude": ["node_modules", "dist"]
+}
+</file>
+
 <file path="src/modules/auth/auth.service.ts">
 import jwt from 'jsonwebtoken';
 import { randomBytes, createHash } from 'crypto';
@@ -2125,87 +2597,6 @@ export class UsersService {
 }
 </file>
 
-<file path="package.json">
-{
-  "name": "syngate-backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "services:up": "docker compose up -d",
-    "services:down": "docker compose down",
-    "services:logs": "docker compose logs -f"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Molimpion/Syngate-BackEnd.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/Molimpion/Syngate-BackEnd/issues"
-  },
-  "homepage": "https://github.com/Molimpion/Syngate-BackEnd#readme",
-  "dependencies": {
-    "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "^7.8.0",
-    "@scalar/api-reference": "^1.55.3",
-    "bcrypt": "^6.0.0",
-    "cloudinary": "^1.41.3",
-    "cors": "^2.8.5",
-    "csv-stringify": "^6.7.0",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "express-async-errors": "^3.1.1",
-    "express-rate-limit": "^8.5.2",
-    "helmet": "^7.1.0",
-    "ioredis": "^5.10.1",
-    "jsonwebtoken": "^9.0.3",
-    "mqtt": "^5.7.0",
-    "multer": "^2.1.1",
-    "multer-storage-cloudinary": "^4.0.0",
-    "pdfkit": "^0.18.0",
-    "pg": "^8.12.0",
-    "pino": "^9.2.0",
-    "pino-http": "^10.1.0",
-    "pino-pretty": "^11.2.1",
-    "rate-limit-redis": "^5.0.0",
-    "socket.io": "^4.7.5",
-    "swagger-ui-express": "^5.0.1",
-    "zod": "^3.23.8"
-  },
-  "devDependencies": {
-    "@commitlint/cli": "^21.0.0",
-    "@commitlint/config-conventional": "^21.0.0",
-    "@types/bcrypt": "^6.0.0",
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/ioredis": "^4.28.10",
-    "@types/jsonwebtoken": "^9.0.10",
-    "@types/multer": "^2.1.0",
-    "@types/node": "^25.9.1",
-    "@types/pdfkit": "^0.17.6",
-    "@types/pg": "^8.20.0",
-    "@types/pino-http": "^5.8.4",
-    "@types/swagger-ui-express": "^4.1.8",
-    "husky": "^9.1.7",
-    "prisma": "^7.8.0",
-    "repomix": "^1.14.0",
-    "ts-node-dev": "^2.0.0",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.3"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
-  }
-}
-</file>
-
 <file path="prisma/schema.prisma">
 // schema.prisma
 //   - hashSenha (guarda o hash bcrypt/argon2, nunca a senha em texto limpo)
@@ -2409,6 +2800,87 @@ model LogAcesso {
 }
 </file>
 
+<file path="package.json">
+{
+  "name": "syngate-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "services:up": "docker compose up -d",
+    "services:down": "docker compose down",
+    "services:logs": "docker compose logs -f"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Molimpion/Syngate-BackEnd.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Molimpion/Syngate-BackEnd/issues"
+  },
+  "homepage": "https://github.com/Molimpion/Syngate-BackEnd#readme",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@scalar/api-reference": "^1.55.3",
+    "bcrypt": "^6.0.0",
+    "cloudinary": "^1.41.3",
+    "cors": "^2.8.5",
+    "csv-stringify": "^6.7.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^7.1.0",
+    "ioredis": "^5.10.1",
+    "jsonwebtoken": "^9.0.3",
+    "mqtt": "^5.7.0",
+    "multer": "^2.1.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "pdfkit": "^0.18.0",
+    "pg": "^8.12.0",
+    "pino": "^9.2.0",
+    "pino-http": "^10.1.0",
+    "pino-pretty": "^11.2.1",
+    "rate-limit-redis": "^5.0.0",
+    "socket.io": "^4.7.5",
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.0.0",
+    "@commitlint/config-conventional": "^21.0.0",
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/ioredis": "^4.28.10",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^25.9.1",
+    "@types/pdfkit": "^0.17.6",
+    "@types/pg": "^8.20.0",
+    "@types/pino-http": "^5.8.4",
+    "@types/swagger-ui-express": "^4.1.8",
+    "husky": "^9.1.7",
+    "prisma": "^7.8.0",
+    "repomix": "^1.14.0",
+    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}
+</file>
+
 <file path="src/app.ts">
 import 'express-async-errors';
 import express from 'express';
@@ -2422,6 +2894,8 @@ import { globalRateLimiter } from './shared/middlewares/rate-limit.middleware';
 import { errorHandler } from './shared/middlewares/error.middleware';
 import { authRouter } from './modules/auth/auth.routes';
 import { usersRouter } from './modules/users/users.routes';
+import { roomsRouter } from './modules/rooms/rooms.routes';
+import { shiftsRouter } from './modules/shifts/shifts.routes';
 
 const app = express();
 
@@ -2461,7 +2935,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'syngate-backend' });
 });
 
-// 🔒 Proteção Estratégica: A documentação só existe fora do ambiente de produção
+// Proteção Estratégica: A documentação só existe fora do ambiente de produção
 if (process.env.NODE_ENV !== 'production') {
   app.use('/swagger', swaggerUi.serve, swaggerUi.setup(openapiSpecification));
   app.get('/docs', (req, res) => {
@@ -2475,6 +2949,8 @@ app.use(globalRateLimiter);
 // --- Roteadores da API ---
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/users', usersRouter);
+app.use('/api/v1/rooms', roomsRouter);
+app.use('/api/v1/shifts', shiftsRouter);
 
 // --- Middleware de Tratamento Global de Erros ---
 app.use(errorHandler);
