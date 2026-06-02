@@ -63,6 +63,10 @@ src/
       auth.controller.ts
       auth.routes.ts
       auth.service.ts
+    devices/
+      devices.controller.ts
+      devices.routes.ts
+      devices.service.ts
     rooms/
       rooms.controller.ts
       rooms.routes.ts
@@ -77,12 +81,14 @@ src/
       users.service.ts
   schemas/
     auth.schema.ts
+    device.schema.ts
     room.schema.ts
     shift.schema.ts
     user.schema.ts
   shared/
     middlewares/
       auth.middleware.ts
+      device.middleware.ts
       error.middleware.ts
       rate-limit.middleware.ts
       role.middleware.ts
@@ -115,20 +121,265 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
-<file path="src/shared/types/shift.types.ts">
-export interface CreateShiftPayload {
-  nome: string;
-  horaInicio: number;
-  horaFim: number;
-  diasSemana: number[];
-}
+<file path="src/modules/devices/devices.controller.ts">
+import { Request, Response } from 'express';
+import { DevicesService } from './devices.service';
 
-export interface UpdateShiftPayload {
-  nome?: string;
-  horaInicio?: number;
-  horaFim?: number;
-  diasSemana?: number[];
+export class DevicesController {
+  private devicesService = new DevicesService();
+
+  create = async (req: Request, res: Response) => {
+    try {
+      const result = await this.devicesService.provision(req.body);
+      return res.status(201).json({ status: 'success', data: result });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      if (error.message.startsWith('400:')) return res.status(400).json({ status: 'error', message: error.message.split(':')[1] });
+      throw error;
+    }
+  };
+
+  findAll = async (req: Request, res: Response) => {
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const search = req.query.search as string | undefined;
+
+    const result = await this.devicesService.findAll(page, limit, search);
+    return res.status(200).json({ status: 'success', data: result.data, meta: result.meta });
+  };
+
+  findById = async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const device = await this.devicesService.findById(id);
+    if (!device) return res.status(404).json({ status: 'error', message: 'Dispositivo não encontrado.' });
+    return res.status(200).json({ status: 'success', data: device });
+  };
+
+  update = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const device = await this.devicesService.update(id, req.body);
+      return res.status(200).json({ status: 'success', data: device });
+    } catch (error: any) {
+      if (error.message.startsWith('409:')) return res.status(409).json({ status: 'error', message: error.message.split(':')[1] });
+      if (error.message.startsWith('400:')) return res.status(400).json({ status: 'error', message: error.message.split(':')[1] });
+      if (error.message.startsWith('404:')) return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
+      throw error;
+    }
+  };
+
+  delete = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      await this.devicesService.delete(id);
+      return res.status(204).send();
+    } catch (error: any) {
+      if (error.message.startsWith('404:')) return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
+      throw error;
+    }
+  };
 }
+</file>
+
+<file path="src/modules/devices/devices.routes.ts">
+import { Router } from 'express';
+import { DevicesController } from './devices.controller';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
+import { roleMiddleware } from '../../shared/middlewares/role.middleware';
+import { validate } from '../../shared/middlewares/validate.middlewares';
+import { createDeviceSchema, updateDeviceSchema } from '../../schemas/device.schema';
+import { PapelUsuario } from '@prisma/client';
+
+const router = Router();
+const devicesController = new DevicesController();
+
+// Apenas GESTOR e COORDENADOR podem visualizar e manipular os dispositivos IoT
+const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
+
+router.use(authMiddleware);
+router.use(roleMiddleware(adminRoles));
+
+router.post('/', validate(createDeviceSchema), devicesController.create);
+router.get('/', devicesController.findAll);
+router.get('/:id', devicesController.findById);
+router.put('/:id', validate(updateDeviceSchema), devicesController.update);
+router.delete('/:id', devicesController.delete);
+
+export { router as devicesRouter };
+</file>
+
+<file path="src/modules/devices/devices.service.ts">
+import { prisma } from '../../lib/prisma';
+import { generateDeviceKey, hashDeviceKey } from '../../shared/utils/device-key';
+import { CreateDevicePayload, UpdateDevicePayload, DispositivoDTO } from '../../shared/types/device.types';
+
+// Seleção padrão para blindar a chave de segurança
+const DEVICE_SELECT = {
+  id: true,
+  nome: true,
+  tipo: true,
+  status: true,
+  enderecoMac: true,
+  ipLocal: true,
+  salaId: true,
+};
+
+export class DevicesService {
+  async provision(data: CreateDevicePayload): Promise<DispositivoDTO & { rawKey: string }> {
+    try {
+      const rawKey = generateDeviceKey();
+      const hashChaveSeguranca = hashDeviceKey(rawKey);
+
+      const device = await prisma.dispositivo.create({
+        data: {
+          ...data,
+          hashChaveSeguranca,
+        },
+        select: DEVICE_SELECT,
+      });
+
+      // Retorna a chave crua APENAS no momento da criação
+      return { ...device, rawKey };
+    } catch (error: any) {
+      if (error.code === 'P2002') {
+        throw new Error('409:O endereço MAC informado já está cadastrado.');
+      }
+      if (error.code === 'P2003') {
+        throw new Error('400:A sala informada não existe.');
+      }
+      throw error;
+    }
+  }
+
+  async findAll(page: number = 1, limit: number = 10, search?: string) {
+    const skip = (page - 1) * limit;
+
+    const whereClause = search
+      ? {
+          OR: [
+            { nome: { contains: search, mode: 'insensitive' as const } },
+            { enderecoMac: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {};
+
+    const [total, dispositivos] = await Promise.all([
+      prisma.dispositivo.count({ where: whereClause }),
+      prisma.dispositivo.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        select: DEVICE_SELECT,
+        orderBy: { nome: 'asc' },
+      }),
+    ]);
+
+    return {
+      data: dispositivos,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async findById(id: string): Promise<DispositivoDTO | null> {
+    return prisma.dispositivo.findUnique({
+      where: { id },
+      select: DEVICE_SELECT,
+    });
+  }
+
+  async update(id: string, data: UpdateDevicePayload): Promise<DispositivoDTO> {
+    try {
+      return await prisma.dispositivo.update({
+        where: { id },
+        data,
+        select: DEVICE_SELECT,
+      });
+    } catch (error: any) {
+      if (error.code === 'P2002') throw new Error('409:O endereço MAC informado já está cadastrado em outro dispositivo.');
+      if (error.code === 'P2003') throw new Error('400:A sala informada não existe.');
+      if (error.code === 'P2025') throw new Error('404:Dispositivo não encontrado.');
+      throw error;
+    }
+  }
+
+  async delete(id: string): Promise<void> {
+    try {
+      await prisma.dispositivo.delete({
+        where: { id },
+      });
+    } catch (error: any) {
+      if (error.code === 'P2025') throw new Error('404:Dispositivo não encontrado.');
+      throw error;
+    }
+  }
+}
+</file>
+
+<file path="src/schemas/device.schema.ts">
+import { z } from 'zod';
+import { TipoDispositivo, StatusDispositivo } from '@prisma/client';
+
+const macRegex = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/;
+
+export const createDeviceSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3, 'O nome do dispositivo deve ter no mínimo 3 caracteres.'),
+    tipo: z.nativeEnum(TipoDispositivo).optional(),
+    enderecoMac: z.string()
+      .toUpperCase()
+      .regex(macRegex, 'O endereço MAC deve estar no formato AA:BB:CC:DD:EE:FF.'),
+    salaId: z.string().uuid('ID da sala inválida. É obrigatório vincular a uma sala.'),
+    ipLocal: z.string().ip('Formato de IP local inválido.').optional(),
+  }),
+});
+
+export const updateDeviceSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3).optional(),
+    tipo: z.nativeEnum(TipoDispositivo).optional(),
+    status: z.nativeEnum(StatusDispositivo).optional(),
+    enderecoMac: z.string().toUpperCase().regex(macRegex).optional(),
+    salaId: z.string().uuid().optional(),
+    ipLocal: z.string().ip().optional(),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('ID do dispositivo inválido.'),
+  }),
+});
+</file>
+
+<file path="src/shared/middlewares/device.middleware.ts">
+import { Request, Response, NextFunction } from 'express';
+import { prisma } from '../../lib/prisma';
+import { hashDeviceKey } from '../utils/device-key';
+
+export const deviceMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  const mac = req.headers['x-device-mac'] as string;
+  const key = req.headers['x-device-key'] as string;
+
+  if (!mac || !key) {
+    return res.status(403).json({ status: 'error', message: 'Credenciais do dispositivo ausentes.' });
+  }
+
+  try {
+    const device = await prisma.dispositivo.findUnique({
+      where: { enderecoMac: mac },
+    });
+
+    if (!device || !device.hashChaveSeguranca || device.status !== 'ATIVO') {
+      return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
+    }
+
+    if (device.hashChaveSeguranca !== hashDeviceKey(key)) {
+      return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
+    }
+
+    req.device = device;
+    return next();
+ } catch (error) {
+  return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
+}
+};
 </file>
 
 <file path=".husky/commit-msg">
@@ -609,72 +860,6 @@ export class RoomsService {
 }
 </file>
 
-<file path="src/modules/shifts/shifts.controller.ts">
-import { Request, Response } from 'express';
-import { ShiftsService } from './shifts.service';
-
-export class ShiftsController {
-  private shiftsService = new ShiftsService();
-
-  create = async (req: Request, res: Response) => {
-    const shift = await this.shiftsService.create(req.body);
-    return res.status(201).json({ status: 'success', data: shift });
-  };
-
-  findAll = async (req: Request, res: Response) => {
-    const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 10;
-    const search = req.query.search as string | undefined;
-
-    const result = await this.shiftsService.findAll(page, limit, search);
-    
-    return res.status(200).json({
-      status: 'success',
-      data: result.data,
-      meta: result.meta
-    });
-  };
-
-  findById = async (req: Request, res: Response) => {
-    const id = req.params.id as string;
-    
-    const shift = await this.shiftsService.findById(id);
-    if (!shift) return res.status(404).json({ status: 'error', message: 'Turno não encontrado.' });
-    
-    return res.status(200).json({ status: 'success', data: shift });
-  };
-
-  update = async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id as string;
-      const shift = await this.shiftsService.update(id, req.body);
-      return res.status(200).json({ status: 'success', data: shift });
-    } catch (error: any) {
-      if (error.message.startsWith('404:')) {
-        return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
-      }
-      throw error;
-    }
-  };
-
-  delete = async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id as string;
-      await this.shiftsService.delete(id);
-      return res.status(204).send();
-    } catch (error: any) {
-      if (error.message.startsWith('400:')) {
-        return res.status(400).json({ status: 'error', message: error.message.split(':')[1] });
-      }
-      if (error.message.startsWith('404:')) {
-        return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
-      }
-      throw error;
-    }
-  };
-}
-</file>
-
 <file path="src/modules/shifts/shifts.routes.ts">
 import { Router } from 'express';
 import { ShiftsController } from './shifts.controller';
@@ -699,80 +884,6 @@ router.put('/:id', roleMiddleware(adminRoles), validate(updateShiftSchema), shif
 router.delete('/:id', roleMiddleware(adminRoles), shiftsController.delete);
 
 export { router as shiftsRouter };
-</file>
-
-<file path="src/modules/shifts/shifts.service.ts">
-import { prisma } from '../../lib/prisma';
-import { Prisma } from '@prisma/client';
-
-export interface CreateShiftPayload {
-  nome: string;
-  horaInicio: number;
-  horaFim: number;
-  diasSemana: number[];
-}
-
-export interface UpdateShiftPayload {
-  nome?: string;
-  horaInicio?: number;
-  horaFim?: number;
-  diasSemana?: number[];
-}
-
-export class ShiftsService {
-  async create(data: CreateShiftPayload) {
-    return prisma.turno.create({
-      data,
-    });
-  }
-
-  async findAll(page: number = 1, limit: number = 10, search?: string) {
-    const skip = (page - 1) * limit;
-
-    const whereClause = search
-      ? { nome: { contains: search, mode: 'insensitive' as const } }
-      : {};
-
-    const [total, turnos] = await Promise.all([
-      prisma.turno.count({ where: whereClause }),
-      prisma.turno.findMany({
-        where: whereClause,
-        skip,
-        take: limit,
-        orderBy: { nome: 'asc' },
-      }),
-    ]);
-
-    return {
-      data: turnos,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-  }
-
-  async findById(id: string) {
-    return prisma.turno.findUnique({
-      where: { id },
-    });
-  }
-
-  async update(id: string, data: UpdateShiftPayload) {
-    return prisma.turno.update({
-      where: { id },
-      data,
-    });
-  }
-
-  async delete(id: string) {
-    return prisma.turno.delete({
-      where: { id },
-    });
-  }
-}
 </file>
 
 <file path="src/modules/users/users.controller.ts">
@@ -1116,13 +1227,30 @@ export interface TokenResponse {
 </file>
 
 <file path="src/shared/types/device.types.ts">
-import { Dispositivo } from '@prisma/client';
+import { Dispositivo, TipoDispositivo, StatusDispositivo } from '@prisma/client';
 
-export type DispositivoDTO = Omit<Dispositivo, 'id' | 'logs'>;
+export type DispositivoDTO = Omit<Dispositivo, 'hashChaveSeguranca' | 'logs'>;
 
 export interface DeviceAuthHeader {
   'x-device-id': string;
   'x-device-secret': string;
+}
+
+export interface CreateDevicePayload {
+  nome: string;
+  tipo?: TipoDispositivo;
+  enderecoMac: string;
+  salaId: string;
+  ipLocal?: string;
+}
+
+export interface UpdateDevicePayload {
+  nome?: string;
+  tipo?: TipoDispositivo;
+  status?: StatusDispositivo;
+  enderecoMac?: string;
+  salaId?: string;
+  ipLocal?: string;
 }
 </file>
 
@@ -1145,6 +1273,22 @@ export * from './user.types';
 export * from './auth.types';
 export * from './device.types';
 export * from './access-log.types';
+</file>
+
+<file path="src/shared/types/shift.types.ts">
+export interface CreateShiftPayload {
+  nome: string;
+  horaInicio: number;
+  horaFim: number;
+  diasSemana: number[];
+}
+
+export interface UpdateShiftPayload {
+  nome?: string;
+  horaInicio?: number;
+  horaFim?: number;
+  diasSemana?: number[];
+}
 </file>
 
 <file path="src/shared/types/user.types.ts">
@@ -1379,6 +1523,139 @@ router.post('/refresh',                         validate(refreshTokenSchema), au
 router.post('/logout',         authMiddleware,                                 authController.logout);
 
 export { router as authRouter };
+</file>
+
+<file path="src/modules/shifts/shifts.controller.ts">
+import { Request, Response } from 'express';
+import { ShiftsService } from './shifts.service';
+
+export class ShiftsController {
+  private shiftsService = new ShiftsService();
+
+  create = async (req: Request, res: Response) => {
+    const shift = await this.shiftsService.create(req.body);
+    return res.status(201).json({ status: 'success', data: shift });
+  };
+
+  findAll = async (req: Request, res: Response) => {
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const search = req.query.search as string | undefined;
+
+    const result = await this.shiftsService.findAll(page, limit, search);
+    
+    return res.status(200).json({
+      status: 'success',
+      data: result.data,
+      meta: result.meta
+    });
+  };
+
+  findById = async (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    
+    const shift = await this.shiftsService.findById(id);
+    if (!shift) return res.status(404).json({ status: 'error', message: 'Turno não encontrado.' });
+    
+    return res.status(200).json({ status: 'success', data: shift });
+  };
+
+  update = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const shift = await this.shiftsService.update(id, req.body);
+      return res.status(200).json({ status: 'success', data: shift });
+    } catch (error: any) {
+      if (error.message.startsWith('404:')) {
+        return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+
+  delete = async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      await this.shiftsService.delete(id);
+      return res.status(204).send();
+    } catch (error: any) {
+      if (error.message.startsWith('400:')) {
+        return res.status(400).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      if (error.message.startsWith('404:')) {
+        return res.status(404).json({ status: 'error', message: error.message.split(':')[1] });
+      }
+      throw error;
+    }
+  };
+}
+</file>
+
+<file path="src/modules/shifts/shifts.service.ts">
+import { prisma } from '../../lib/prisma';
+import { Prisma } from '@prisma/client';
+import { CreateShiftPayload, UpdateShiftPayload } from '../../shared/types/shift.types';
+
+export class ShiftsService {
+  async create(data: CreateShiftPayload) {
+    return prisma.turno.create({ data });
+  }
+
+  async findAll(page: number = 1, limit: number = 10, search?: string) {
+    const skip = (page - 1) * limit;
+
+    const whereClause = search
+      ? { nome: { contains: search, mode: 'insensitive' as const } }
+      : {};
+
+    const [total, turnos] = await Promise.all([
+      prisma.turno.count({ where: whereClause }),
+      prisma.turno.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        orderBy: { nome: 'asc' },
+      }),
+    ]);
+
+    return {
+      data: turnos,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async findById(id: string) {
+    return prisma.turno.findUnique({ where: { id } });
+  }
+
+  async update(id: string, data: UpdateShiftPayload) {
+    try {
+      return await prisma.turno.update({ where: { id }, data });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025') throw new Error('404:Turno não encontrado.');
+      }
+      throw error;
+    }
+  }
+
+  async delete(id: string) {
+    try {
+      return await prisma.turno.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2025') throw new Error('404:Turno não encontrado.');
+        if (error.code === 'P2003') throw new Error('400:Não é possível excluir este turno pois existem usuários vinculados a ele.');
+      }
+      throw error;
+    }
+  }
+}
 </file>
 
 <file path="src/schemas/user.schema.ts">
@@ -2896,6 +3173,7 @@ import { authRouter } from './modules/auth/auth.routes';
 import { usersRouter } from './modules/users/users.routes';
 import { roomsRouter } from './modules/rooms/rooms.routes';
 import { shiftsRouter } from './modules/shifts/shifts.routes';
+import { devicesRouter } from './modules/devices/devices.routes';
 
 const app = express();
 
@@ -2951,6 +3229,7 @@ app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/rooms', roomsRouter);
 app.use('/api/v1/shifts', shiftsRouter);
+app.use('/api/v1/devices', devicesRouter);
 
 // --- Middleware de Tratamento Global de Erros ---
 app.use(errorHandler);

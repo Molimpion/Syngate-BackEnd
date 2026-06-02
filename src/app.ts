@@ -12,6 +12,7 @@ import { authRouter } from './modules/auth/auth.routes';
 import { usersRouter } from './modules/users/users.routes';
 import { roomsRouter } from './modules/rooms/rooms.routes';
 import { shiftsRouter } from './modules/shifts/shifts.routes';
+import { devicesRouter } from './modules/devices/devices.routes';
 
 const app = express();
 
@@ -67,6 +68,7 @@ app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/rooms', roomsRouter);
 app.use('/api/v1/shifts', shiftsRouter);
+app.use('/api/v1/devices', devicesRouter);
 
 // --- Middleware de Tratamento Global de Erros ---
 app.use(errorHandler);
