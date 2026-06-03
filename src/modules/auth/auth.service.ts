@@ -6,7 +6,12 @@ import { comparePassword, hashPassword } from '../../shared/utils/hash';
 import { LoginPayload, CadastroPayload, TokenResponse } from '../../shared/types/auth.types';
 import { PapelUsuario, TipoToken } from '@prisma/client';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
+// Sem fallback — a aplicação não sobe sem JWT_SECRET definido
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('FATAL: JWT_SECRET não definido. Configure a variável de ambiente antes de iniciar.');
+}
+
 const ACCESS_TOKEN_EXPIRES_IN = '15m';
 const REFRESH_TOKEN_EXPIRES_DAYS = 7;
 
@@ -34,7 +39,7 @@ export class AuthService {
 
   async logout(accessToken: string): Promise<void> {
     try {
-      const decoded = jwt.verify(accessToken, JWT_SECRET) as jwt.JwtPayload;
+      const decoded = jwt.verify(accessToken, JWT_SECRET!) as jwt.JwtPayload;
       if (decoded.exp) {
         const tempoRestante = decoded.exp - Math.floor(Date.now() / 1000);
         if (tempoRestante > 0) {
@@ -42,6 +47,7 @@ export class AuthService {
         }
       }
     } catch {
+      // Token já inválido/expirado — sem ação necessária
     }
   }
 
@@ -55,7 +61,6 @@ export class AuthService {
     }
 
     const senhaHasheada = await hashPassword(dados.senha);
-
     const tokenVerificacao = randomBytes(32).toString('hex');
 
     await prisma.usuario.create({
@@ -69,6 +74,7 @@ export class AuthService {
       },
     });
 
+    // TODO: disparar e-mail com link contendo o tokenVerificacao
     if (process.env.NODE_ENV === 'development') {
       console.log(`[DEV] Token de verificação para ${dados.email}: ${tokenVerificacao}`);
     }
@@ -122,7 +128,7 @@ export class AuthService {
   }
 
   private async generateTokens(usuarioId: string, papel: PapelUsuario): Promise<TokenResponse> {
-    const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET, {
+    const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET!, {
       expiresIn: ACCESS_TOKEN_EXPIRES_IN,
     });
 

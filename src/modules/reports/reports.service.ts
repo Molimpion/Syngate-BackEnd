@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/prisma';
 import { redis } from '../../lib/redis';
 import { stringify } from 'csv-stringify/sync';
+import { Prisma, StatusAcesso } from '@prisma/client';
 import { ReportFilters } from '../../shared/types/report.types';
 
 export class ReportsService {
@@ -14,9 +15,9 @@ export class ReportsService {
       return JSON.parse(cachedData);
     }
 
-    // 3. Constrói a query de filtro dinamicamente
-    const whereClause: any = {};
-    
+    // 3. Constrói a query de filtro dinamicamente com tipo correto
+    const whereClause: Prisma.LogAcessoWhereInput = {};
+
     if (filters.dataInicio || filters.dataFim) {
       whereClause.dataHora = {};
       if (filters.dataInicio) whereClause.dataHora.gte = new Date(filters.dataInicio);
@@ -24,9 +25,8 @@ export class ReportsService {
     }
     if (filters.usuarioId) whereClause.usuarioId = filters.usuarioId;
     if (filters.dispositivoId) whereClause.dispositivoId = filters.dispositivoId;
-    if (filters.status) whereClause.status = filters.status;
-
-    // 4. Executa a busca crua e as agregações em paralelo
+    if (filters.status) whereClause.status = filters.status as StatusAcesso;
+    // 4. Executa a busca e as agregações em paralelo
     const [logs, totalPorStatus, totalPorDirecao] = await Promise.all([
       prisma.logAcesso.findMany({
         where: whereClause,
@@ -37,7 +37,7 @@ export class ReportsService {
         orderBy: { dataHora: 'desc' },
       }),
       prisma.logAcesso.groupBy({ by: ['status'], _count: true, where: whereClause }),
-      prisma.logAcesso.groupBy({ by: ['direcao'], _count: true, where: whereClause })
+      prisma.logAcesso.groupBy({ by: ['direcao'], _count: true, where: whereClause }),
     ]);
 
     // 5. Monta o objeto final de resposta
@@ -50,7 +50,7 @@ export class ReportsService {
       detalhes: logs,
     };
 
-    // 6. Salva no Redis com TTL de 5 minutos (300 segundos)
+    // 6. Salva no Redis com TTL de 5 minutos
     await redis.set(cacheKey, JSON.stringify(reportData), 'EX', 300);
 
     return reportData;
@@ -59,8 +59,12 @@ export class ReportsService {
   async generateCSV(filters: ReportFilters): Promise<string> {
     const report = await this.getAccessReport(filters);
 
-    // Mapeia os dados para um formato plano adequado para planilhas
-    const flatData = report.detalhes.map((log: any) => ({
+    const flatData = report.detalhes.map((log: Prisma.LogAcessoGetPayload<{
+      include: {
+        usuario: { select: { nome: true; matricula: true; papel: true } };
+        dispositivo: { select: { nome: true; sala: { select: { nome: true; bloco: true } } } };
+      };
+    }>) => ({
       'Data e Hora': new Date(log.dataHora).toLocaleString('pt-BR'),
       'Status': log.status,
       'Direção': log.direcao,
@@ -74,7 +78,6 @@ export class ReportsService {
       'Motivo Negação': log.motivo || '-',
     }));
 
-    // Gera a string CSV com cabeçalhos automáticos
     return stringify(flatData, { header: true, delimiter: ';' });
   }
 }
