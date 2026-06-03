@@ -1,8 +1,7 @@
 import { prisma } from '../../lib/prisma';
-import { hashPassword } from '../../utils/hash';
-import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../types/user.types';
+import { hashPassword } from '../../shared/utils/hash';
+import { UsuarioPublico, CreateUsuarioPayload, UpdateUsuarioPayload } from '../../shared/types/user.types';
 
-// Centraliza os campos de retorno para blindar o sistema contra vazamento do hashSenha
 const USER_SELECT_FIELDS = {
   id: true,
   nome: true,
@@ -16,6 +15,7 @@ const USER_SELECT_FIELDS = {
   turnoId: true,
   criadoEm: true,
   atualizadoEm: true,
+  emailVerificado: true,
 };
 
 export class UsersService {

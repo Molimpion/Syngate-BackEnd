@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { UsersController } from './users.controller';
-import { authMiddleware } from '../../middlewares/auth.middleware';
-import { roleMiddleware } from '../../middlewares/role.middleware';
-import { validate } from '../../middlewares/validate.middlewares';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
+import { roleMiddleware } from '../../shared/middlewares/role.middleware';
+import { validate } from '../../shared/middlewares/validate.middlewares';
 import { 
   createUserSchema, 
   updateUserSchema, 
@@ -14,13 +14,10 @@ import { PapelUsuario } from '@prisma/client';
 const router = Router();
 const usersController = new UsersController();
 
-// Camada 1: Autenticação obrigatória
 router.use(authMiddleware);
 
-// Rota de Perfil (Isenta de restrição administrativa, ID inferido via token JWT)
 router.get('/me', usersController.getProfile);
 
-// Camada 2: Apenas Gestores e Coordenadores a partir daqui
 const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
 router.use(roleMiddleware(adminRoles));
 

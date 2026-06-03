@@ -4,13 +4,17 @@ import cors from 'cors';
 import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import swaggerUi from 'swagger-ui-express';
-
 import { openapiSpecification } from './config/swagger';
 import { renderScalar } from './config/scalar-config';
-import { globalRateLimiter } from './middlewares/rate-limit.middleware';
-import { errorHandler } from './middlewares/error.middleware';
+import { globalRateLimiter } from './shared/middlewares/rate-limit.middleware';
+import { errorHandler } from './shared/middlewares/error.middleware';
 import { authRouter } from './modules/auth/auth.routes';
 import { usersRouter } from './modules/users/users.routes';
+import { roomsRouter } from './modules/rooms/rooms.routes';
+import { shiftsRouter } from './modules/shifts/shifts.routes';
+import { devicesRouter } from './modules/devices/devices.routes';
+import { accessRouter } from './modules/access/access.routes';
+import { reportsRouter } from './modules/reports/reports.routes';
 
 const app = express();
 
@@ -50,7 +54,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'syngate-backend' });
 });
 
-// 🔒 Proteção Estratégica: A documentação só existe fora do ambiente de produção
+// Proteção Estratégica: A documentação só existe fora do ambiente de produção
 if (process.env.NODE_ENV !== 'production') {
   app.use('/swagger', swaggerUi.serve, swaggerUi.setup(openapiSpecification));
   app.get('/docs', (req, res) => {
@@ -64,6 +68,11 @@ app.use(globalRateLimiter);
 // --- Roteadores da API ---
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/users', usersRouter);
+app.use('/api/v1/rooms', roomsRouter);
+app.use('/api/v1/shifts', shiftsRouter);
+app.use('/api/v1/devices', devicesRouter);
+app.use('/api/v1/access', accessRouter);
+app.use('/api/v1/reports', reportsRouter);
 
 // --- Middleware de Tratamento Global de Erros ---
 app.use(errorHandler);
