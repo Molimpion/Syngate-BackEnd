@@ -51,6 +51,15 @@ prisma/
     migration_lock.toml
   schema.prisma
   seed.ts
+refs/
+  false-positives.md
+  language.md
+  nextjs-checklist.md
+  project-stack.md
+  proxy-middleware.md
+  report.md
+  secrets.md
+  security-headers.md
 src/
   config/
     scalar-config.ts
@@ -58,7 +67,12 @@ src/
   lib/
     prisma.ts
     redis.ts
+    socket.gateway.ts
   modules/
+    access/
+      access.controller.ts
+      access.routes.ts
+      access.service.ts
     auth/
       auth.controller.ts
       auth.routes.ts
@@ -67,6 +81,10 @@ src/
       devices.controller.ts
       devices.routes.ts
       devices.service.ts
+    reports/
+      reports.controller.ts
+      reports.routes.ts
+      reports.service.ts
     rooms/
       rooms.controller.ts
       rooms.routes.ts
@@ -80,6 +98,7 @@ src/
       users.routes.ts
       users.service.ts
   schemas/
+    access-log.schema.ts
     auth.schema.ts
     device.schema.ts
     room.schema.ts
@@ -99,10 +118,12 @@ src/
       device.types.ts
       express.d.ts
       index.ts
+      report.types.ts
       shift.types.ts
       user.types.ts
     utils/
       device-key.ts
+      events.ts
       hash.ts
       shift-validator.ts
   app.ts
@@ -115,11 +136,1684 @@ LICENSE
 package.json
 prisma.config.ts
 README.md
+SECURITY_AUDIT.md
+SKILL.md
 tsconfig.json
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path=".husky/commit-msg">
+npx --no -- commitlint --edit "$1"
+</file>
+
+<file path="prisma/migrations/20260524180949_initial_schema/migration.sql">
+-- Migration: initial_schema
+-- Schema completo do Syngate — tabelas, enums, índices e extensões numa migration só
+
+-- ─── Extensões ───────────────────────────────────────────────────────────────
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ─── Enums ───────────────────────────────────────────────────────────────────
+
+CREATE TYPE "PapelUsuario" AS ENUM (
+  'ALUNO',
+  'PROFESSOR',
+  'FUNCIONARIO',
+  'COORDENADOR',
+  'GESTOR',
+  'VISITANTE'
+);
+
+CREATE TYPE "TipoDispositivo" AS ENUM (
+  'CATRACA',
+  'LEITOR_CARTAO'
+);
+
+CREATE TYPE "StatusAcesso" AS ENUM (
+  'CONCEDIDO',
+  'NEGADO'
+);
+
+CREATE TYPE "FinalidadeLog" AS ENUM (
+  'ENTRADA_PREDIO',
+  'PRESENCA_SALA'
+);
+
+CREATE TYPE "DirecaoAcesso" AS ENUM (
+  'ENTRADA',
+  'SAIDA'
+);
+
+CREATE TYPE "StatusDispositivo" AS ENUM (
+  'ATIVO',
+  'INATIVO',
+  'MANUTENCAO'
+);
+
+CREATE TYPE "TipoToken" AS ENUM (
+  'CHAVE_API',
+  'REFRESH',
+  'APP'
+);
+
+-- ─── Tabelas ─────────────────────────────────────────────────────────────────
+
+CREATE TABLE "turnos" (
+  "id"         TEXT NOT NULL,
+  "nome"       TEXT NOT NULL,
+  "horaInicio" INTEGER NOT NULL,
+  "horaFim"    INTEGER NOT NULL,
+  "diasSemana" INTEGER[],
+  CONSTRAINT "turnos_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "usuarios" (
+  "id"               TEXT NOT NULL,
+  "nome"             TEXT NOT NULL,
+  "email"            TEXT NOT NULL,
+  "hashSenha"        TEXT NOT NULL,
+  "matricula"        TEXT,
+  "cartaoId"         TEXT,
+  "curso"            TEXT,
+  "papel"            "PapelUsuario" NOT NULL DEFAULT 'ALUNO',
+  "ativo"            BOOLEAN NOT NULL DEFAULT true,
+  "dataExpiracao"    TIMESTAMP(3),
+  "emailVerificado"  BOOLEAN NOT NULL DEFAULT false,
+  "tokenVerificacao" TEXT,
+  "turnoId"          TEXT,
+  "criadoEm"         TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "atualizadoEm"     TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "usuarios_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "tokens" (
+  "id"            TEXT NOT NULL,
+  "tipo"          "TipoToken" NOT NULL,
+  "hash"          TEXT NOT NULL,
+  "dataExpiracao" TIMESTAMP(3),
+  "revogado"      BOOLEAN NOT NULL DEFAULT false,
+  "usuarioId"     TEXT NOT NULL,
+  "criadoEm"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "tokens_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "salas" (
+  "id"    TEXT NOT NULL,
+  "nome"  TEXT NOT NULL,
+  "bloco" TEXT,
+  CONSTRAINT "salas_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "dispositivos" (
+  "id"                 TEXT NOT NULL,
+  "nome"               TEXT NOT NULL,
+  "tipo"               "TipoDispositivo"   NOT NULL DEFAULT 'LEITOR_CARTAO',
+  "status"             "StatusDispositivo" NOT NULL DEFAULT 'ATIVO',
+  "enderecoMac"        TEXT,
+  "hashChaveSeguranca" TEXT,
+  "ipLocal"            TEXT,
+  "salaId"             TEXT NOT NULL,
+  CONSTRAINT "dispositivos_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "logs_acesso" (
+  "id"            TEXT NOT NULL,
+  "dataHora"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "status"        "StatusAcesso" NOT NULL,
+  "finalidade"    "FinalidadeLog"   NOT NULL DEFAULT 'ENTRADA_PREDIO',
+  "direcao"       "DirecaoAcesso"   NOT NULL DEFAULT 'ENTRADA',
+  "motivo"        TEXT,
+  "usuarioId"     TEXT,
+  "uidCartao"     TEXT,
+  "dispositivoId" TEXT NOT NULL,
+  CONSTRAINT "logs_acesso_pkey" PRIMARY KEY ("id")
+);
+
+-- ─── Unique Constraints ───────────────────────────────────────────────────────
+
+CREATE UNIQUE INDEX "usuarios_email_key"            ON "usuarios"("email");
+CREATE UNIQUE INDEX "usuarios_matricula_key"         ON "usuarios"("matricula");
+CREATE UNIQUE INDEX "usuarios_cartaoId_key"          ON "usuarios"("cartaoId");
+CREATE UNIQUE INDEX "usuarios_tokenVerificacao_key"  ON "usuarios"("tokenVerificacao");
+CREATE UNIQUE INDEX "tokens_hash_key"                ON "tokens"("hash");
+CREATE UNIQUE INDEX "salas_nome_bloco_key"           ON "salas"("nome", "bloco");
+CREATE UNIQUE INDEX "dispositivos_enderecoMac_key"   ON "dispositivos"("enderecoMac");
+
+-- ─── Índices B-Tree (performance em filtros comuns) ───────────────────────────
+
+CREATE INDEX "tokens_usuarioId_idx"                    ON "tokens"("usuarioId");
+CREATE INDEX "logs_acesso_dataHora_idx"                ON "logs_acesso"("dataHora");
+CREATE INDEX "logs_acesso_usuarioId_dataHora_idx"      ON "logs_acesso"("usuarioId", "dataHora");
+CREATE INDEX "logs_acesso_dispositivoId_dataHora_idx"  ON "logs_acesso"("dispositivoId", "dataHora");
+CREATE INDEX "logs_acesso_usuarioId_status_idx"        ON "logs_acesso"("usuarioId", "status");
+
+-- ─── Índices GIN pg_trgm (buscas ILIKE performáticas) ────────────────────────
+
+CREATE INDEX "idx_usuarios_nome_trgm"  ON "usuarios" USING GIN ("nome"  gin_trgm_ops);
+CREATE INDEX "idx_usuarios_email_trgm" ON "usuarios" USING GIN ("email" gin_trgm_ops);
+
+-- ─── Foreign Keys ─────────────────────────────────────────────────────────────
+
+ALTER TABLE "usuarios" ADD CONSTRAINT "usuarios_turnoId_fkey"
+  FOREIGN KEY ("turnoId") REFERENCES "turnos"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE "tokens" ADD CONSTRAINT "tokens_usuarioId_fkey"
+  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
+  ON DELETE CASCADE ON UPDATE CASCADE;
+
+ALTER TABLE "dispositivos" ADD CONSTRAINT "dispositivos_salaId_fkey"
+  FOREIGN KEY ("salaId") REFERENCES "salas"("id")
+  ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_usuarioId_fkey"
+  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_dispositivoId_fkey"
+  FOREIGN KEY ("dispositivoId") REFERENCES "dispositivos"("id")
+  ON DELETE CASCADE ON UPDATE CASCADE;
+</file>
+
+<file path="prisma/migrations/20260524182854_sync_gin_indexes/migration.sql">
+-- RenameIndex
+ALTER INDEX "idx_usuarios_email_trgm" RENAME TO "usuarios_email_idx";
+
+-- RenameIndex
+ALTER INDEX "idx_usuarios_nome_trgm" RENAME TO "usuarios_nome_idx";
+</file>
+
+<file path="prisma/migrations/migration_lock.toml">
+# Please do not edit this file manually
+# It should be added in your version-control system (e.g., Git)
+provider = "postgresql"
+</file>
+
+<file path="refs/false-positives.md">
+# Falsos positivos — não reportar sem evidência
+
+Carregar este arquivo no **Step 6 (Self-Verification)**. Um achado só entra no relatório se passar por estas regras.
+
+---
+
+## Regra geral
+
+Antes de reportar, responder **sim** a todas:
+
+1. Existe **caminho de exploit** plausível (não só “padrão suspeito”)?
+2. A entrada é **controlada pelo atacante** (request, upload, header, query param, body)?
+3. Não há **sanitização/validação/auth** no mesmo request ou em proxy/middleware upstream?
+4. O código está em **caminho de produção** (não storybook, mock, teste, `.agents/`, `node_modules/`)?
+
+Se qualquer resposta for “não” ou “incerto” → **descartar** ou marcar **LOW + confiança LOW** como “revisão manual”.
+
+---
+
+## React / JSX
+
+| Padrão | Por que NÃO é achado automático |
+|--------|----------------------------------|
+| `dangerouslySetInnerHTML` com HTML de **constantes**, tema, ou CSS gerado de `config` interno (ex.: shadcn `chart.tsx`) | Sem input do usuário no `__html` |
+| `dangerouslySetInnerHTML` com conteúdo de CMS **já sanitizado** (DOMPurify, `sanitize-html`) documentado na mesma função | Verificar import e uso na cadeia |
+| Texto `{user.name}` em JSX | React escapa por padrão — **não é XSS** |
+| `href={userUrl}` | Só reportar se `userUrl` vem de input **sem** validação de protocolo (`javascript:`, `data:`) |
+| `target="_blank"` sem `rel="noopener noreferrer"` | **LOW** (tabnabbing), não HIGH |
+
+**Reportar XSS** apenas quando: HTML/raw markup de fonte não confiável chega ao DOM sem escape (innerHTML, dangerouslySetInnerHTML com user/CMS, `document.write`, templates não escapados).
+
+---
+
+## Next.js App Router
+
+| Padrão | Por que NÃO é achado automático |
+|--------|----------------------------------|
+| Server Action / Route Handler **sem** `auth()` visível no mesmo arquivo | Pode estar em wrapper, `layout.tsx`, ou helper importado — **rastrear imports** |
+| `export const dynamic = 'force-dynamic'` | Preferência de cache, não vulnerabilidade |
+| Uso de `cookies()` / `headers()` em Server Component | API normal do App Router |
+| `revalidatePath` / `revalidateTag` após mutation | Cache invalidation esperado |
+| Arquivo em `app/(public)/` | Rotas públicas **por design** — validar dados expostos, não “falta auth” |
+| `middleware.ts` ausente | Next **≥ 16:** procurar **`proxy.ts`** — ver `refs/proxy-middleware.md`. Nem todo app exige borda; auth pode estar só em handlers/actions |
+| “Falta middleware” em Next 16+ com `proxy.ts` presente | Descartar — convenção renomeada, não ausência de proteção |
+| Sugerir criar `middleware.ts` em projeto **next ≥ 16** | Descartar patch — usar `proxy.ts` + export `proxy` |
+| `next.config` sem `headers()` custom | Ver `refs/security-headers.md` — no máximo **INFO**; HSTS pode estar no CDN (Vercel, etc.) |
+| Sugerir CSP/HSTS copiado de tutorial de **outra major** do Next | **Descartar** como patch — incompatível com versão instalada / quebra Stripe-OAuth-Tailwind |
+| “Falta helmet” em app **só** App Router | `helmet` é padrão Express; não exigir pacote extra sem API Express no projeto |
+
+**Reportar auth bypass** quando: mutation sensível (delete, pagamento, alteração de outro usuário) executa **sem** checagem de sessão **e** sem layout/route group protegido verificável.
+
+---
+
+## Auth.js (NextAuth v5)
+
+| Padrão | Por que NÃO é achado automático |
+|--------|----------------------------------|
+| `trustHost: true` em produção com Vercel/host conhecido | Necessário em muitos deploys Auth.js — contexto de hosting importa |
+| Session JWT vs database | Ambos válidos; checar **expiração** e **segredo** (`AUTH_SECRET`), não o adapter |
+| `GET` em `/api/auth/[...nextauth]` | Handler oficial do framework |
+| Página mostra `session.user.email` para usuário logado | Comportamento esperado no painel |
+
+**Reportar** quando: `auth()` nunca é chamado em rota sensível; `session.user.id` de param/body usado em query **sem** comparar com `session.user.id`; role/plan checado só no cliente.
+
+---
+
+## Prisma / SQL
+
+| Padrão | Por que NÃO é achado automático |
+|--------|----------------------------------|
+| `prisma.user.findMany({ where: { id } })` com `id` validado por Zod/uuid | ORM parametrizado |
+| Template string em **log** ou mensagem de erro, não na query | Não é SQLi |
+| `$queryRaw` / `$executeRaw` com **tagged template** `` Prisma.sql`...` `` e parâmetros | API segura do Prisma |
+| `findFirst` com `userId: session.user.id` | BOLA mitigado se `userId` vem da sessão, não do cliente |
+
+**Reportar SQLi** quando: `$queryRawUnsafe`, concatenação de string em SQL, ou `where` montado com input não validado.
+
+---
+
+## Segredos
+
+| Padrão | Por que NÃO é achado automático |
+|--------|----------------------------------|
+| `process.env.STRIPE_SECRET_KEY` sem valor literal | Correto |
+| `NEXT_PUBLIC_*` com chave **publishable** Stripe (`pk_`) | Propositalmente pública |
+| Placeholders: `your-api-key`, `changeme`, `xxx`, exemplos em README | Documentação |
+| `.env.example` com chaves vazias ou fake | Template |
+| Arquivo `.env*` listado no Git mas **apenas** no `.gitignore` (não tracked) | OK — reportar só se **tracked** (`git ls-files`) |
+
+**Reportar** apenas literais de alto risco: `sk_live_`, `rk_live_`, `whsec_` real, `BEGIN PRIVATE KEY`, connection strings com senha embutida.
+
+---
+
+## Dependências
+
+| Padrão | Por que NÃO é achado automático |
+|--------|----------------------------------|
+| Versão “antiga” sem CVE associado | **INFO** no máximo |
+| `npm audit` moderate em devDependency não usada em runtime | Avaliar árvore de import |
+| Next.js patch atrás do latest | Atualização recomendada, não vulnerabilidade sem advisory |
+
+**Reportar** com CVE/advisory identificado (GHSA, npm audit, OSV). Preferir `npm audit --omit=dev` para runtime.
+
+---
+
+## Arquivos e pastas — excluir do scan profundo
+
+Não gastar achados em:
+
+- `node_modules/`, `.next/`, `out/`, `build/`, `coverage/`
+- `src/generated/**` (Prisma client gerado)
+- `*.test.ts`, `*.spec.ts`, `__tests__/`, `e2e/` (a menos que o escopo seja só testes)
+- `.agents/skills/**` (meta-documentação da skill)
+- Lockfiles inteiros linha a linha (usar `npm audit` agregado)
+
+---
+
+## Severidade — quando rebaixar
+
+| Situação inicial | Ajuste após verificação |
+|------------------|-------------------------|
+| XSS em comentário TODO | Descartar |
+| IDOR se recurso é público por regra de negócio | INFO ou descartar |
+| Missing CSRF em Server Action (Next 14+) | MEDIUM/INFO — framework mitiga origem; só HIGH se `allowedOrigins` mal configurado em proxy / multi-zones na versão instalada |
+| Exigir `unauthorized()` com Next &lt; 16 instalado | Descartar — usar redirect/throw/401 da versão do projeto |
+| Projeto “atrás da latest” sem CVE | INFO no máximo — auditoria foca versão instalada |
+| `console.log` com objeto de erro em catch | LOW — só HIGH se logar senha/token/session completa |
+| CORS `*` em rota **somente** de webhook com assinatura HMAC | Verificar assinatura antes de reportar CORS |
+| Ausência de CSP/HSTS no `next.config.ts` isolada | **INFO** + confiança **LOW**; ver `refs/security-headers.md` — não CRITICAL/HIGH |
+| `middleware.ts` legado em Next 16+ sem migração | **INFO** (deprecated), não HIGH — codemod opcional |
+| Patch proposto com `headers()` não testado na major do `next` instalado | Não incluir em Patch Proposals — só nota de hardening opcional |
+
+Documentar achados descartados na seção **“Falsos positivos descartados”** do relatório (ver `refs/report.md`).
+</file>
+
+<file path="refs/language.md">
+# Padrões por linguagem — JavaScript / TypeScript / React / Next.js
+
+Carregar no **Step 1** **depois** de `refs/project-stack.md` (versões **instaladas** no lockfile).
+
+Aplicar seções condicionais pelo **major** detectado (ex.: `unauthorized()` só se Next ≥ 16). Complementa `refs/nextjs-checklist.md` e `refs/false-positives.md`.
+
+---
+
+## APIs de alto risco (sinks)
+
+Investigar sempre que **input do usuário** possa alcançar:
+
+```ts
+eval()
+new Function()
+child_process.exec / execSync / spawn
+fs.readFile / writeFile / unlink  // path controlado pelo usuário
+fetch(url)  // url controlada pelo usuário → SSRF
+dangerouslySetInnerHTML
+element.innerHTML
+document.write()
+```
+
+Prisma:
+
+```ts
+// CRITICAL — concatenação / unsafe
+prisma.$queryRawUnsafe(`SELECT * FROM t WHERE id = ${id}`)
+prisma.$executeRawUnsafe(userInput)
+
+// Avaliar com cuidado — tagged template com parâmetros é o padrão seguro
+prisma.$queryRaw`SELECT ...`
+prisma.$queryRaw(Prisma.sql`...`, ...)
+
+// Seguro quando where usa tipos + input validado (Zod)
+prisma.appointment.findMany({ where: { userId: sessionUserId } })
+```
+
+---
+
+## React (versão instalada — major 18 ou 19+)
+
+### XSS — reportar quando
+
+```tsx
+// HTML de usuário/CMS sem sanitização
+<div dangerouslySetInnerHTML={{ __html: post.content }} />
+
+// NÃO reportar automaticamente — CSS de config interna (shadcn chart, temas)
+<style dangerouslySetInnerHTML={{ __html: generatedFromThemeConfig }} />
+```
+
+```tsx
+// React escapa — NÃO é XSS
+<p>{user.bio}</p>
+
+// Reportar se URL vem do usuário sem validação
+<a href={userUrl}>link</a>
+// Fix: allowlist http/https ou use URL + block javascript: e data:
+```
+
+### Cliente
+
+- Tokens/sessão em `localStorage` sem necessidade → preferir cookie httpOnly (Auth.js)
+- `NEXT_PUBLIC_*` com secret de API → **CRITICAL**
+
+---
+
+## Next.js — App Router (13+ se `app/` existir)
+
+### Server Actions (15+ comum; 14+ possível)
+
+Tratar como **endpoint público** ([data security](https://nextjs.org/docs/app/guides/data-security)):
+
+> Proteção na **página ou layout não se estende** à Server Action: a action é outro ponto de entrada e precisa de `auth()` / autorização **dentro** da action (ou helper chamado no topo). Válido em qualquer major recente; reforçado na doc Next 15+.
+
+```ts
+'use server'
+
+import { auth } from '@/lib/auth'
+import { z } from 'zod'
+
+const schema = z.object({ name: z.string().min(1) })
+
+export async function updateProfile(data: unknown) {
+  const session = await auth()
+  if (!session?.user?.id) {
+    throw new Error('Unauthorized')
+  }
+
+  const parsed = schema.parse(data)
+
+  await prisma.user.update({
+    where: { id: session.user.id }, // ownership — NÃO usar id do formData sem checar
+    data: { name: parsed.name },
+  })
+}
+```
+
+**Next.js ≥ 16 (instalado)** — `unauthorized()` / `forbidden()`:
+
+```ts
+import { unauthorized } from 'next/navigation'
+
+export async function updateProfile(data: unknown) {
+  const session = await auth()
+  if (!session?.user?.id) {
+    unauthorized()
+  }
+  // ...
+}
+```
+
+Se Next **&lt; 16**: usar `throw`, `redirect('/login')` ou `NextResponse.json(..., { status: 401 })` — não reportar “falta unauthorized()” como HIGH.
+
+Sinais de problema:
+
+- `'use server'` sem `auth()` (e sem helper que chama auth no topo)
+- `where: { id: formData.get('userId') }` com ID do cliente
+- Mutação destrutiva (`delete`, `updateMany`) sem escopo por `session.user.id`
+
+CSRF: Next (14+) mitiga origem em Server Actions; com proxy/CDN/multi-zones revisar `serverActions.allowedOrigins` no `next.config` **da versão instalada** (path `experimental` vs top-level varia por major — ler o arquivo real do projeto).
+
+### Route Handlers (`app/api/**/route.ts`)
+
+```ts
+import { auth } from '@/lib/auth'
+import { NextResponse } from 'next/server'
+
+export const GET = auth(async function GET(request) {
+  if (!request.auth) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const clinicId = request.auth.user?.id
+  // usar clinicId da sessão — evitar clinicId de query para autorização
+
+  // ...
+}) as any // 'as any' é tipagem, não segurança — não reportar só por isso
+```
+
+Sinais de problema:
+
+- `export async function GET` sem `auth` em rota que retorna dados privados
+- `req.nextUrl.searchParams.get('clinicId')` usado em `where` sem igualar à sessão
+- Aceitar `POST` em rota que deveria ser só leitura
+
+### Proxy / Middleware na borda (opcional)
+
+Convenção depende do **major do `next` instalado** — ver `refs/proxy-middleware.md`.
+
+```ts
+// Next < 16 — middleware.ts
+export { auth as middleware } from '@/lib/auth'
+export const config = { matcher: ['/dashboard/:path*'] }
+
+// Next ≥ 16 — proxy.ts (middleware.ts deprecated)
+export { auth as proxy } from '@/lib/auth'
+export const config = { matcher: ['/dashboard/:path*'] }
+```
+
+- Ausência de **`middleware.ts`** em Next **≥ 16** → procurar **`proxy.ts`** antes de concluir “sem borda”
+- Ausência de ambos **não** implica vulnerabilidade se auth está em handlers/actions/layouts
+- Proxy **não** substitui auth em Server Actions (checks otimistas / redirect apenas)
+
+### Rotas públicas vs painel
+
+- `app/(public)/**` — dados expostos intencionalmente; revisar **o que** vaza, não “falta login”
+- `app/(panel)/**` — exigir sessão no layout **e** revalidar na API/action (defesa em profundidade)
+
+### RSC e cache
+
+- Não confundir `export const dynamic = 'force-dynamic'` com falha de segurança
+- Dados sensíveis em props de Client Component — minimizar campos serializados (ver AGENTS.md do projeto)
+
+---
+
+## Auth.js (NextAuth v5)
+
+```ts
+export const { handlers, signIn, signOut, auth } = NextAuth({
+  adapter: PrismaAdapter(prisma),
+  providers: [GitHub, Google],
+  // AUTH_SECRET obrigatório em produção (env)
+})
+```
+
+| Verificar | Notas |
+|-----------|--------|
+| `AUTH_SECRET` / `NEXTAUTH_SECRET` | Forte, só env |
+| `trustHost: true` | Comum em Vercel; não é achado isolado |
+| Session em Server Component | `const session = await auth()` + redirect se null |
+| API | Wrapper `auth(handler)` ou checagem manual |
+
+**IDOR típico:** `prisma.appointment.findMany({ where: { userId: params.id } })` com `params.id` da URL em rota autenticada — corrigir para `session.user.id`.
+
+---
+
+## Prisma 7
+
+- Preferir queries tipadas; validar UUIDs/strings com Zod antes do `where`
+- Segundo ordem: dados maliciosos **armazenados** e exibidos depois (stored XSS), não SQLi
+- `src/generated/prisma` — **não** auditar como código manual
+
+---
+
+## Stripe (webhooks)
+
+```ts
+import Stripe from 'stripe'
+
+const event = stripe.webhooks.constructEvent(
+  body,           // raw string/Buffer — não JSON parseado antes
+  signature,
+  process.env.STRIPE_WEBHOOK_SECRET!
+)
+// só após sucesso: atualizar subscription, etc.
+```
+
+Sem `constructEvent` → **HIGH**.  
+Confiar só em `metadata.userId` sem reconciliar com Stripe → **MEDIUM/HIGH** conforme impacto.
+
+---
+
+## Zod + react-hook-form
+
+- Server Actions devem usar `schema.parse` / `safeParse` no servidor — validação só no cliente não conta
+- `z.coerce.number()` em IDs — garantir inteiros positivos e ownership depois
+
+---
+
+## `next.config` — headers (CSP, HSTS)
+
+Não tratar ausência de `headers()` como falha de segurança grave. Ver **`refs/security-headers.md`**:
+
+- Severidade máxima **INFO** (confiança **LOW**) se só faltar CSP/HSTS no config
+- HSTS pode estar no CDN (Vercel, Cloudflare) — não visível no repo
+- Não propor snippet de outra major do Next; CSP quebra Auth.js, Stripe.js, Tailwind e scripts do Next na versão instalada
+
+---
+
+## Express (só se existir `server.js` / API legada)
+
+Não é o padrão deste monorepo; se aparecer:
+
+- `helmet()`, limite de body, CORS restrito
+- Nunca `cors({ origin: '*' })` com credenciais
+
+---
+
+## Arquivos sensíveis e `.gitignore`
+
+Rodar verificação de presença **e** rastreamento Git (ver `refs/secrets.md`).
+
+Reportar se `.env` ou chaves aparecem em `git ls-files` mesmo com `.gitignore` (commit acidental).
+
+---
+
+## Integração com outras refs
+
+| Tema | Arquivo |
+|------|---------|
+| Versões instaladas / gates | `refs/project-stack.md` |
+| O que não reportar | `refs/false-positives.md` |
+| Roteiro Next | `refs/nextjs-checklist.md` |
+| Segredos | `refs/secrets.md` |
+| CSP / HSTS | `refs/security-headers.md` |
+| Proxy vs middleware | `refs/proxy-middleware.md` |
+| Relatório | `refs/report.md` |
+</file>
+
+<file path="refs/nextjs-checklist.md">
+# Checklist de vulnerabilidades — Next.js / React / TypeScript
+
+Referência para **Step 4** e **Step 5**. Versões e pacotes: **`refs/project-stack.md`** (lockfile do projeto auditado).
+
+Priorizar App Router se existir `app/` ou `src/app/`; Pages Router só se existir `pages/`.
+
+Fontes (ajustar à major instalada): [Authentication](https://nextjs.org/docs/app/guides/authentication), [Data security](https://nextjs.org/docs/app/guides/data-security), OWASP ASVS.
+
+---
+
+## 1. Mapa de superfície (Step 1)
+
+Localizar e listar no relatório:
+
+| Tipo | Glob / padrão |
+|------|----------------|
+| Route Handlers | `src/app/api/**/route.ts` |
+| Server Actions | arquivos com `'use server'` ou `*_actions/*.ts` |
+| Server Components com dados sensíveis | `app/(panel)/**`, `dashboard/**` |
+| Rotas públicas | `app/(public)/**` |
+| Auth | `lib/auth.ts`, `api/auth/[...nextauth]/route.ts` |
+| Webhooks | `api/webhook/**` |
+| Uploads | `api/image/**`, integrações Cloudinary/S3 |
+| Proxy / Middleware | Next ≥ 16: `proxy.ts`; Next &lt; 16: `middleware.ts` — `refs/proxy-middleware.md` |
+| ORM | `lib/prisma.ts`, `prisma/schema.prisma` |
+
+**Inventário dinâmico:** listar no relatório só dependências presentes (`next-auth`, `prisma`, `stripe`, `zod`, etc.) com versão do lockfile.
+
+---
+
+## 2. Autenticação e autorização
+
+### Server Actions (`'use server'`)
+
+- [ ] Auth **dentro da action**, mesmo que a página já tenha checado sessão (entry point separado — Next 14+)
+- [ ] Toda mutation sensível chama `auth()` (ou helper) **no início**; `unauthorized()` se Next ≥ 16 instalado
+- [ ] `userId` / `clinicId` usado em `where` vem de `session.user.id`, **não** de `formData` ou params sem validar ownership
+- [ ] Inputs validados com **Zod** (ou similar) antes do Prisma
+- [ ] Erros não vazam stack trace ao cliente em produção
+
+### Route Handlers (`route.ts`)
+
+- [ ] Método HTTP restrito quando aplicável (`GET` vs `POST`)
+- [ ] Padrão Auth.js: `export const GET = auth(async function GET(req) { if (!req.auth) ... })`
+- [ ] IDs de recurso na URL não substituem checagem de dono (BOLA/IDOR)
+
+### Layouts e páginas
+
+- [ ] Rotas `(panel)` redirecionam ou bloqueiam sem sessão
+- [ ] Dados de outro tenant não retornados em `findMany` por ID vindo do cliente
+
+### Auth.js
+
+- [ ] `AUTH_SECRET` definido e forte (env)
+- [ ] Providers OAuth com redirect URIs corretos no painel GitHub/Google
+- [ ] `trustHost` justificado pelo ambiente de deploy
+
+---
+
+## 3. Injeção
+
+### Prisma
+
+- [ ] Proibir `$queryRawUnsafe` / SQL concatenado
+- [ ] Preferir `findMany`, `update`, `where` tipado
+- [ ] Raw queries só com `` Prisma.sql`...${param}` ``
+
+### XSS
+
+- [ ] `dangerouslySetInnerHTML` — ver `refs/false-positives.md`
+- [ ] Conteúdo rich text: sanitizar no servidor antes de armazenar ou renderizar
+
+### Command / path
+
+- [ ] `child_process` com input do usuário
+- [ ] `fs.readFile`/`writeFile` com path de query/body
+- [ ] `fetch(userSuppliedUrl)` sem allowlist → SSRF
+
+---
+
+## 4. Webhooks e pagamentos (se `stripe` no package.json)
+
+- [ ] `stripe.webhooks.constructEvent(body, signature, webhookSecret)` antes de processar
+- [ ] Raw body preservado para verificação (não `JSON.parse` antes da assinatura)
+- [ ] Idempotência em eventos duplicados
+- [ ] Nenhuma operação financeira só por confiar em metadata sem validar customer/subscription no Stripe
+
+---
+
+## 5. Upload e arquivos
+
+- [ ] Autenticação no endpoint de upload
+- [ ] Validação de MIME/tamanho/extensão
+- [ ] URLs de Cloudinary não permitem overwrite de pasta de outro usuário
+- [ ] Sem path traversal em nomes de arquivo
+
+---
+
+## 6. Dados e privacidade
+
+- [ ] Respostas JSON não expõem campos desnecessários (senha, tokens, `subscription` interna)
+- [ ] `console.log` em catch não loga PII ou session inteira
+- [ ] Páginas públicas (`/clinica/[id]`) só expõem dados realmente públicos
+
+---
+
+## 7. Configuração Next.js (versão instalada)
+
+- [ ] `serverActions.allowedOrigins` se Next ≥15 e app atrás de proxy/CDN ou [multi-zones](https://nextjs.org/docs/app/guides/multi-zones)
+- [ ] `npm audit` sem HIGH/CRITICAL ignorado; opcional: comparar com `npm view next version` → INFO se sem CVE
+- [ ] Imagens remotas: `images.remotePatterns` restritivo
+- [ ] Variáveis sensíveis **sem** prefixo `NEXT_PUBLIC_`
+- [ ] Headers de segurança — **`refs/security-headers.md`** (`next.config`, `proxy.ts`/`middleware.ts`, host)
+- [ ] Borda Next ≥ 16: não exigir `middleware.ts`; auth na borda opcional via **`proxy.ts`** — `refs/proxy-middleware.md`
+
+---
+
+## 8. Cliente (React)
+
+- [ ] Segredos nunca em bundle cliente
+- [ ] React Query: endpoints já autenticados no servidor; não confiar só em UI para esconder botões
+- [ ] Links externos com `rel="noopener noreferrer"` quando `target="_blank"`
+
+---
+
+## 9. Fluxo de dados (Step 5)
+
+Desenhar mentalmente:
+
+```
+Entrada (searchParams, params, body, headers, cookies, formData)
+  → validação (Zod?)
+  → auth (auth() / req.auth?)
+  → autorização (ownership, plan, role)
+  → sink (Prisma, fetch, HTML, fs, Stripe, Cloudinary)
+```
+
+Vulnerabilidades cross-file aparecem quando **auth** está só no layout mas a **action** é importada de outro módulo sem checagem.
+
+---
+
+## 10. Comandos pós-scan sugeridos no relatório
+
+```bash
+npm audit --omit=dev
+npm run build
+npm run lint
+```
+
+Opcional: `npx @better-auth/cli@latest` não se aplica aqui; para Auth.js revisar config em [authjs.dev](https://authjs.dev).
+</file>
+
+<file path="refs/project-stack.md">
+# Stack do projeto — versões instaladas (multi-repo)
+
+**Regra:** cada auditoria usa o **projeto aberto**, não uma versão fixa global. A skill serve qualquer app Next.js + React.
+
+Carregar no **Step 1** antes de `language.md` e `nextjs-checklist.md`.
+
+---
+
+## 1. Onde ler versões (ordem de prioridade)
+
+| Fonte                                                | Uso                                                         |
+| ---------------------------------------------------- | ----------------------------------------------------------- |
+| `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock` | Versão **efetivamente instalada** (preferir para auditoria) |
+| `package.json` → `dependencies` / `devDependencies`  | Intervalo semver (`^`, `~`) — só se lockfile ausente        |
+| `node_modules/next/package.json` → `version`         | Confirmação local (opcional)                                |
+
+Registrar no relatório como **Stack detectado (instalado)**, não “versão que a skill espera”.
+
+Comandos úteis:
+
+```bash
+# Versões instaladas (npm)
+npm ls next react react-dom next-auth prisma @prisma/client stripe --depth=0
+
+# Última publicada no registry (apenas comparação INFO — opcional)
+npm view next version
+npm view react version
+```
+
+**Foco da auditoria:** comportamento e CVEs da versão **instalada**.  
+**Última lançada:** só **INFO** (“há patch mais novo”), nunca CRITICAL/HIGH só por estar desatualizado sem advisory.
+
+---
+
+## 2. Pacotes a inventariar sempre
+
+Extrair versão instalada quando presente:
+
+| Pacote                                   | Impacto na auditoria                                     |
+| ---------------------------------------- | -------------------------------------------------------- |
+| `next`                                   | App Router, Server Actions, `proxy`/`middleware`, config |
+| `react`, `react-dom`                     | XSS, RSC, Client Components                              |
+| `next-auth` / `@auth/*`                  | Auth.js v5                                               |
+| `prisma`, `@prisma/client`               | SQLi, raw queries                                        |
+| `stripe`                                 | Webhooks                                                 |
+| `@supabase/*`, `drizzle-orm`, `mongoose` | ORM alternativo                                          |
+| `zod`, `yup`, `valibot`                  | Validação server-side                                    |
+| `@tanstack/react-query`                  | Não substitui auth no servidor                           |
+| `cloudinary`, `@aws-sdk/*`               | Upload / storage                                         |
+| `express`, `fastify`                     | API legada no mesmo monorepo                             |
+
+Listar no relatório apenas o que existir no `package.json`.
+
+---
+
+## 3. Detectar “formato” do Next (filesystem)
+
+Não assumir `src/app/` — adaptar paths:
+
+```
+app/ ou src/app/     → App Router
+pages/ ou src/pages/ → Pages Router (checklist legado)
+middleware.ts (Next &lt; 16) ou proxy.ts (Next ≥ 16) → raiz ou src/ — ver refs/proxy-middleware.md
+next.config.ts/js/mjs
+```
+
+**App Router** se existir `app/**/page.tsx` ou `src/app/**/page.tsx`.  
+**Pages Router** adicional se existir `pages/**` — auditar rotas `pages/api` separadamente.
+
+---
+
+## 4. Regras por major do Next (instalado)
+
+Usar `semver` mental: major de `next` no lockfile.
+
+| Next (major) | Checklist extra                                                                                                                                                                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|              |
+| **14+**      | Server Actions estáveis; partial prerender — não confundir com falha de auth                                                                                                                                                                            |
+| **15+**      | Reforço CSRF/origem em Server Actions; revisar `next.config` do projeto                                                                                                                                                                                 |
+| **16+**      | `unauthorized()` / `forbidden()`; [data security](https://nextjs.org/docs/app/guides/data-security); **`middleware` → `proxy`** ([Proxy](https://nextjs.org/docs/app/getting-started/proxy)) — não reportar “falta middleware.ts” sem buscar `proxy.ts` |
+
+Links de documentação: usar major instalado quando consultar Context7, ex. `/vercel/next.js/v16.2.2` ou doc genérica `/vercel/next.js` se versão exata não existir.
+
+---
+
+## 5. Regras por major do React (instalado)
+
+| React (major) | Notas                                                       |
+| ------------- | ----------------------------------------------------------- |
+| **18+**       | RSC, `use server` boundaries                                |
+| **19+**       | Mesmos sinks XSS; React Compiler opcional — não altera auth |
+
+Peer do Next: se `npm ls` mostrar mismatch react/next (warn de peer), registrar **INFO** — risco de build/runtime, não vulnerabilidade automática.
+
+---
+
+## 6. Auth.js / NextAuth
+
+| Pacote                           | Padrão                                                   |
+| -------------------------------- | -------------------------------------------------------- |
+| `next-auth@5` / `next-auth@beta` | Auth.js: `auth()`, `handlers`, `auth(handler)`           |
+| `next-auth@4`                    | `getServerSession`, `[...nextauth]` Pages — checklist v4 |
+
+Detectar por import: `from "next-auth"` vs `from "@/lib/auth"` — seguir implementação do repo.
+
+---
+
+## 7. Dependências (Step 2) — escopo do projeto atual
+
+```bash
+npm audit --omit=dev
+# ou: pnpm audit / yarn npm audit
+```
+
+- CVEs só para pacotes **no lockfile deste repo**
+- Correlacionar advisory com **versão instalada**, não com “latest”
+- Upgrade sugerido: mesma major quando possível; major bump = nota de breaking no patch proposal
+
+Pacotes críticos frequentes (auditar se instalados):
+
+`next`, `react`, `react-dom`, `next-auth`, `jsonwebtoken`, `cookie`, `sharp`, `ws`, `path-to-regexp`, `prisma`, `stripe`, `postcss`, `esbuild` (via toolchain)
+
+---
+
+## 8. Bloco obrigatório no relatório (copiar valores reais)
+
+```
+Stack detectado (instalado):
+  next@<lockfile>
+  react@<lockfile> / react-dom@<lockfile>
+  <outras deps relevantes>
+
+Router: App Router | Pages | híbrido
+Auth: Auth.js v5 | NextAuth v4 | outro | ausente
+ORM: Prisma <n> | Drizzle | …
+
+Última versão registry (opcional, INFO):
+  next@<npm view>  react@<npm view>
+  Δ: <behind/ahead> — sem CVE → não elevar severidade
+```
+
+---
+
+## 8b. Headers (CSP / HSTS)
+
+Não auditar como gap crítico só porque `next.config` não define `headers()`. Seguir **`refs/security-headers.md`**: severidade máxima INFO/LOW, patches de CSP condicionados à **versão instalada** de `next` e às integrações do `package.json`.
+
+---
+
+## 9. O que NÃO fazer
+
+- Não auditar como se o projeto fosse Next 16 se o lockfile diz 14.x
+- Não exigir `unauthorized()` se Next &lt; 16
+- Não reportar HIGH por “Next desatualizado” sem CVE/advisory
+- Não propor `headers()` / CSP de exemplo de outra major do Next sem validar compatibilidade
+- Não hardcodar Stripe/Prisma/Cloudinary se o projeto não usa
+- Não misturar `package.json` de um monorepo workspace sem escopo (`/security-audit apps/web`)
+
+---
+
+## 10. Monorepos
+
+Se o usuário passar path (`apps/web`):
+
+- Ler `package.json` **desse** workspace
+- `npm audit` na raiz do workspace ou do monorepo conforme onde está o lockfile
+- Mapear `app/` relativo ao package escolhido
+</file>
+
+<file path="refs/proxy-middleware.md">
+# Proxy vs Middleware (Next.js por versão instalada)
+
+Carregar no **Step 1** (com `refs/project-stack.md`) e ao auditar auth/headers na borda.
+
+**Fonte:** [Proxy (Next.js 16.2+)](https://nextjs.org/docs/app/getting-started/proxy), [Upgrade v16 — middleware to proxy](https://nextjs.org/docs/app/guides/upgrading/version-16).
+
+---
+
+## 1. Regra por major do `next` (lockfile)
+
+| Next instalado | Arquivo canônico | Export da função | Notas |
+|----------------|------------------|------------------|--------|
+| **&lt; 16** | `middleware.ts` / `.js` | `middleware` (default ou named) | Doc e exemplos usam `middleware` |
+| **≥ 16** | `proxy.ts` / `.js` (preferido) | `proxy` (default ou named) | `middleware.ts` **deprecated** — migrar, não criar novo |
+| **≥ 16** + `middleware.ts` ainda no repo | Legado / migração pendente | `middleware` | **INFO** “codemod `middleware-to-proxy`”, não HIGH por “nome errado” sozinho |
+
+**Local:** raiz do projeto ou `src/`, no mesmo nível que `app/` ou `pages/` — **um único arquivo** `proxy.ts` (lógica extra em módulos importados).
+
+---
+
+## 2. O que NÃO reportar
+
+| Situação (Next ≥ 16) | Motivo |
+|----------------------|--------|
+| “Ausência de `middleware.ts`” | Arquivo correto pode ser **`proxy.ts`** — procurar os dois nomes antes de concluir |
+| “Falta middleware de auth” com `proxy.ts` + `auth` reexport | Equivalente funcional |
+| Sugerir **criar** `middleware.ts` em projeto Next 16+ | Desatualizado — indicar `proxy.ts` e export `proxy` |
+| Exigir Proxy para auth completa | Doc oficial: Proxy é para checks **otimistas** (redirect), não substitui auth em Server Actions / Route Handlers |
+
+---
+
+## 3. O que verificar na auditoria
+
+1. `next` major em `refs/project-stack.md`
+2. Existência de **`proxy.ts`** ou **`middleware.ts`** (grep / glob na raiz e `src/`)
+3. Conteúdo: headers, `matcher`, redirects, reexport Auth.js (`auth as proxy` vs `auth as middleware`)
+4. **Next ≥ 16:** se só existir `middleware.ts` → INFO migração; se não existir nenhum → OK se auth em layouts/handlers/actions
+5. **Edge runtime:** em Next 16, `proxy` usa runtime **nodejs** (não configurável). Projetos que **precisam Edge** podem manter `middleware.ts` — **INFO**, não vulnerabilidade
+
+```bash
+# Codemod oficial (mencionar só como sugestão INFO, não aplicar automaticamente)
+npx @next/codemod@latest middleware-to-proxy .
+```
+
+---
+
+## 4. Auth.js / NextAuth
+
+Padrões comuns (adaptar ao major do Next):
+
+```ts
+// Next < 16 — middleware.ts
+export { auth as middleware } from '@/lib/auth'
+
+// Next ≥ 16 — proxy.ts (quando migrado)
+export { auth as proxy } from '@/lib/auth'
+```
+
+Se o projeto está em Next 16+ mas ainda usa `export { auth as middleware }` em `middleware.ts` → **INFO** (convenção deprecated), não bypass de auth, desde que o arquivo rode.
+
+**Auth real** continua obrigatória em Server Actions e `route.ts` — Proxy não substitui.
+
+---
+
+## 5. Headers de segurança na borda
+
+Em Next ≥ 16, headers em `proxy.ts` substituem o papel que a skill citava em `middleware.ts`.
+
+Ver também `refs/security-headers.md` — mesma cautela (INFO, versão, CDN).
+
+```ts
+// Exemplo conceitual — não colar sem testar na versão instalada
+export function proxy(request: NextRequest) {
+  const response = NextResponse.next()
+  response.headers.set('X-Frame-Options', 'DENY')
+  return response
+}
+```
+
+---
+
+## 6. Texto modelo — falso positivo descartado
+
+```
+• “Ausência de middleware.ts”
+  Motivo: next@16.x — convenção renomeada para proxy.ts; arquivo não encontrado
+  mas auth em route handlers / layouts verificado. Ver refs/proxy-middleware.md.
+```
+
+---
+
+## 7. Texto modelo — INFO migração
+
+```
+⚪ INFO — middleware.ts em projeto Next 16+
+
+  next@<instalado> — middleware.ts ainda presente; Next 16 depreca em favor de proxy.ts
+  e export `proxy`. Funcionalidade equivalente; considerar codemod middleware-to-proxy.
+  Confiança: LOW
+```
+
+---
+
+## 8. Integração
+
+| Arquivo | Uso |
+|---------|-----|
+| `refs/project-stack.md` | Major do Next |
+| `refs/false-positives.md` | Não exigir middleware.ts em Next 16+ |
+| `refs/security-headers.md` | Headers em proxy/middleware |
+| `refs/language.md` | Exemplos Auth por versão |
+</file>
+
+<file path="refs/report.md">
+# Formato do relatório — Security Audit
+
+Usar no **Step 7**. Idioma principal: **português**. Manter termos OWASP/CVE em inglês quando padrão da indústria.
+
+---
+
+## Cabeçalho
+
+```
+╔══════════════════════════════════════════════════════════╗
+║           🔐 RELATÓRIO DE AUDITORIA DE SEGURANÇA        ║
+║           Skill: security-audit                         ║
+╚══════════════════════════════════════════════════════════╝
+
+Projeto:     <nome ou caminho>
+Data:        <data da varredura>
+Escopo:      <paths analisados>
+Stack detectado (instalado — lockfile):
+  next@<resolved>  react@<resolved>  react-dom@<resolved>
+  <outras deps do projeto: next-auth, prisma, stripe, …>
+Router:      App Router | Pages | híbrido
+Registry (INFO, opcional): next@<latest> — Δ N patches (sem CVE → não elevar severidade)
+Excluídos:   <node_modules, .next, generated, …>
+```
+
+---
+
+## 1. Resumo executivo (obrigatório — primeiro bloco)
+
+```
+┌────────────────────────────────────────────────┐
+│           RESUMO DE ACHADOS                    │
+├──────────────┬─────────────────────────────────┤
+│ 🔴 CRITICAL  │  <n>                           │
+│ 🟠 HIGH      │  <n>                           │
+│ 🟡 MEDIUM    │  <n>                           │
+│ 🔵 LOW       │  <n>                           │
+│ ⚪ INFO      │  <n>                           │
+├──────────────┼─────────────────────────────────┤
+│ TOTAL        │  <n>                           │
+└──────────────┴─────────────────────────────────┘
+
+Auditoria de dependências:  <n> pacotes com CVE / npm audit>
+Scan de segredos:          <n> credenciais expostas (tracked)>
+Falsos positivos descartados: <n>  (ver seção 6)
+```
+
+Se **zero** achados CRITICAL–LOW:
+
+```
+✅ Nenhuma vulnerabilidade confirmada nos critérios desta auditoria.
+   Escopo: <detalhar>. Limitações: análise estática, sem DAST.
+```
+
+---
+
+## 2. Card de achado (por categoria)
+
+Repetir para cada vulnerabilidade **confirmada** após Step 6:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟠 HIGH — IDOR / BOLA (Autorização)
+Confiança: HIGH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📍 Local:  src/app/api/clinic/appointments/route.ts, linha 39
+
+🔍 Código:
+  const clinicId = searchParams.get("clinicId")
+  await prisma.appointment.findMany({ where: { userId: clinicId } })
+
+⚠️  Risco:
+  Um usuário autenticado pode passar outro clinicId e listar agendamentos
+  de outra clínica.
+
+  Exemplo: GET /api/...?clinicId=<uuid-vítima>
+
+✅ Correção:
+  Usar apenas request.auth.user.id da sessão, ignorar clinicId do cliente.
+
+📚 Referência: OWASP API1:2023 — Broken Object Level Authorization
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Campos obrigatórios por card:
+
+- Severidade + tipo
+- **Confiança:** HIGH | MEDIUM | LOW
+- Local (arquivo + linha)
+- Snippet real
+- Risco + exemplo de abuso (se aplicável)
+- Correção acionável
+- Referência OWASP/CWE quando couber
+
+---
+
+## 3. Auditoria de dependências
+
+```
+📦 DEPENDÊNCIAS
+════════════════
+
+🟠 HIGH — <pacote>@<versão>
+  Advisory: <CVE/GHSA>
+  Impacto: <resumo>
+  Correção: npm install <pacote>@<versão-fixa> ou npm audit fix
+
+⚪ INFO — next@<instalado> (registry: <latest>)
+  Sem CVE no npm audit; há versão mais nova — planejar upgrade em janela de manutenção.
+```
+
+Regras:
+
+- Sem CVE confirmado → não usar HIGH/CRITICAL
+- Citar saída de `npm audit` quando existir
+
+---
+
+## 4. Scan de segredos
+
+```
+🔑 SEGREDOS E EXPOSIÇÃO
+═══════════════════════
+
+🔴 CRITICAL — Chave Stripe live no repositório
+  Arquivo: src/.../config.ts, linha 12
+  Trecho: STRIPE_SECRET_KEY = "sk_live_..."
+
+  Ações:
+  1. Rotacionar em https://dashboard.stripe.com
+  2. Remover do código; usar process.env.STRIPE_SECRET_KEY
+  3. Confirmar .gitignore (.env*)
+  4. Se já houve push: git log -S 'sk_live_' --all
+```
+
+Se nada encontrado:
+
+```
+✅ Nenhum segredo de alto risco em arquivos rastreados pelo Git.
+   .gitignore: <ok / gaps listados>
+```
+
+---
+
+## 5. Propostas de patch (CRITICAL + HIGH)
+
+````
+🛠️  PROPOSTAS DE PATCH
+══════════════════════
+⚠️  Revise cada patch antes de aplicar. Nada foi alterado no repositório.
+
+─────────────────────────────────────────────
+Patch 1/N: <título curto>
+─────────────────────────────────────────────
+
+ANTES (vulnerável):
+```ts
+// caminho:linha
+...
+```
+
+DEPOIS (corrigido):
+```ts
+// caminho:linha — <motivo do fix>
+...
+```
+─────────────────────────────────────────────
+````
+
+Patches devem respeitar estilo do projeto (imports `@/`, Auth.js, Prisma).
+
+---
+
+## 6. Falsos positivos descartados (quando aplicável)
+
+Listar candidatos analisados no Step 6 e **por que não** viraram achado:
+
+```
+🧹 FALSOS POSITIVOS DESCARTADOS
+═══════════════════════════════
+
+• src/components/ui/chart.tsx — dangerouslySetInnerHTML
+  Motivo: CSS gerado de config interna (THEMES), sem input do usuário.
+
+• “Ausência de middleware.ts”
+  Motivo: next@16+ — convenção é proxy.ts; ou auth em route handlers/layouts sem borda.
+  Ver refs/proxy-middleware.md.
+```
+
+Isso aumenta confiança no relatório e evita ruído em PRs.
+
+---
+
+## 7. Cobertura e próximos passos
+
+```
+📋 COBERTURA
+  Arquivos analisados:  <n> (aprox.)
+  Tipos:               Route Handlers, Server Actions, auth, webhooks, …
+  Ferramentas:         leitura estática, npm audit, git ls-files
+
+⚡ PRÓXIMOS PASSOS
+  1. Corrigir CRITICAL imediatamente
+  2. HIGH no sprint atual
+  3. MEDIUM/LOW no backlog
+  4. Opcional: DAST, rate limiting, CSP (ver refs/security-headers.md — alinhado à versão do Next), SAST no CI
+
+💡 Limitação: auditoria estática — não substitui teste dinâmico nem pentest.
+```
+
+---
+
+## Guia de confiança
+
+| Confiança | Quando usar |
+|-----------|-------------|
+| **HIGH** | Exploit claro; sem sanitização/auth no caminho |
+| **MEDIUM** | Provável; depende de deploy, proxy ou chamador não visto |
+| **LOW** | Padrão suspeito; exige revisão humana — preferir descartar ou INFO |
+
+Nunca omitir confiança. Se LOW e não for vulnerabilidade clara → mover para **§6 Descartados** em vez de achado.
+
+---
+
+## Ordem das seções no output final
+
+1. Cabeçalho  
+2. Resumo executivo (tabela)  
+3. Achados por categoria  
+4. Dependências  
+5. Segredos  
+6. Patches (se CRITICAL/HIGH)  
+7. Falsos positivos descartados  
+8. Cobertura e próximos passos
+</file>
+
+<file path="refs/secrets.md">
+# Padrões de segredos — JavaScript / TypeScript / Next.js
+
+Usar no **Step 3 (Secrets & Exposure Scan)**. Combinar busca textual + julgamento (evitar alarme em placeholders).
+
+---
+
+## Comandos úteis (Node.js)
+
+```bash
+# Dependências vulneráveis (runtime)
+npm audit --omit=dev
+
+# Arquivos sensíveis rastreados pelo Git
+git ls-files | findstr /i "\.env credentials \.pem \.key id_rsa"
+# Linux/macOS: git ls-files | grep -E '\.(env|pem|key)$|credentials|id_rsa'
+```
+
+---
+
+## Prefixos de alto risco (reportar se literal no código tracked)
+
+| Prefixo / padrão | Serviço |
+|------------------|---------|
+| `sk_live_`, `rk_live_` | Stripe (secreto) |
+| `sk_test_` em repo público | Stripe test (MEDIUM em repo privado pode ser INFO) |
+| `whsec_` | Stripe webhook secret |
+| `pk_live_` em arquivo **sem** `NEXT_PUBLIC_` | Stripe — possível misconfig |
+| `AKIA[0-9A-Z]{16}` | AWS access key |
+| `-----BEGIN (RSA \|EC \|OPENSSH )?PRIVATE KEY-----` | Chave privada |
+| `xox[baprs]-` | Slack |
+| `ghp_`, `gho_`, `github_pat_` | GitHub |
+| `AIza[0-9A-Za-z\-_]{35}` | Google API |
+| `mongodb(\+srv)?:\/\/[^:]+:[^@]+@` | MongoDB com senha na URL |
+| `postgresql:\/\/[^:]+:[^@]+@` | Postgres com senha na URL |
+
+---
+
+## Variáveis de ambiente esperadas (se presentes no projeto)
+
+Verificar que existem **apenas** em `.env*` (gitignored), nunca hardcoded:
+
+- `AUTH_SECRET` / `NEXTAUTH_SECRET`
+- `DATABASE_URL`
+- `GITHUB_ID`, `GITHUB_SECRET`, `GOOGLE_ID`, `GOOGLE_SECRET`
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+- `CLOUDINARY_*` (API secret, não só cloud name)
+- Chaves de upload/imagem
+
+`NEXT_PUBLIC_*` — só chaves **destinadas** ao browser (ex.: `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`).
+
+---
+
+## Arquivos que nunca devem ser commitados
+
+Confirmar presença no `.gitignore` **e** que não aparecem em `git ls-files`:
+
+```
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+credentials.json
+service-account.json
+gcp-key.json
+secrets.yaml
+secrets.json
+```
+
+Se o padrão **não** estiver no `.gitignore` → achado **MEDIUM** (risco de commit futuro), mesmo que o arquivo não exista hoje.
+
+---
+
+## Onde procurar além de `src/`
+
+- `.github/workflows/` — secrets em `env:` devem usar `${{ secrets.* }}`, não literais
+- `docker-compose.yml`, `Dockerfile` — `ENV` com valores reais
+- `vercel.json`, `next.config.ts` — env embutido
+- Scripts em `package.json` — flags com tokens
+- Comentários e strings em testes e fixtures
+- Histórico Git (mencionar no relatório se achar literal: `git log -S 'sk_live_' --all`)
+
+---
+
+## Falsos positivos em secrets (não reportar)
+
+- `process.env.VAR` ou `env.VAR` (Next.js `env` schema) sem fallback literal secreto
+- `sk_test_...` em arquivos `.env.example` claramente fake (`xxx`, `your_key_here`)
+- UUIDs genéricos sem prefixo de provedor
+- Hashes bcrypt/argon em seeds de dev documentados
+- Tokens em snapshots de teste com nome `mock`, `fake`, `test-token`
+
+---
+
+## Ações no relatório quando achar segredo real
+
+1. Rotacionar no painel do provedor **imediatamente**
+2. Remover do código; usar variável de ambiente
+3. Confirmar `.gitignore`
+4. Auditar histórico (`git log -p`, BFG/git-filter-repo se já foi pushado)
+</file>
+
+<file path="refs/security-headers.md">
+# Headers de segurança (CSP, HSTS, etc.) — cautela por versão e deploy
+
+Carregar no **Step 4** ao revisar `next.config.*`, `proxy.ts` / `middleware.ts` (conforme major do Next — `refs/proxy-middleware.md`), `vercel.json`, ou “falta CSP/HSTS”.
+
+**Regra de ouro:** ausência de `headers()` custom em `next.config.ts` **não é vulnerabilidade** por si só. No máximo **INFO**, com ressalvas de versão e hosting.
+
+---
+
+## 1. O que verificar ANTES de sugerir qualquer header
+
+| Ordem | Onde olhar                                                                                                                    |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Versão **instalada** de `next` (`refs/project-stack.md`)                                                                      |
+| 2     | `next.config.ts` / `.js` / `.mjs` **do projeto** (não template de outra versão)                                               |
+| 3     | `proxy.ts` (Next ≥ 16) ou `middleware.ts` (Next &lt; 16) — headers na resposta |
+| 4     | `vercel.json`, `netlify.toml`, `nginx.conf`, Cloudflare dashboard (mencionar no relatório se não estiver no repo)             |
+| 5     | Dependências que **quebram** com CSP rígido: Stripe.js, OAuth (GitHub/Google), Cloudinary, analytics, Recharts, `next/script` |
+
+Nunca colar bloco `headers()` copiado da documentação de **outra major** do Next sem validar sintaxe e comportamento da versão do lockfile.
+
+---
+
+## 2. Severidade permitida
+
+| Achado                                                                                         | Severidade máxima | Confiança típica                                                 |
+| ---------------------------------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------- |
+| Sem `Content-Security-Policy` custom no `next.config`                                          | **INFO**          | LOW                                                              |
+| Sem `Strict-Transport-Security` no `next.config`                                               | **INFO** (ver §3) | LOW                                                              |
+| Sem `X-Frame-Options` / `frame-ancestors`                                                      | **LOW**           | LOW — salvo app financeiro/admin em iframe                       |
+| CSP **permissiva** (`unsafe-inline`, `*`) em app com dados sensíveis                           | **MEDIUM**        | MEDIUM — se XSS real também existir, não inflar só por CSP fraca |
+| Header **ativo e errado** (ex.: `Access-Control-Allow-Origin: *` + cookies em API autenticada) | **HIGH**          | HIGH — isso sim é misconfig exploitável                          |
+
+**Proibido:** CRITICAL/HIGH **somente** por “não tem CSP no next.config”.
+
+---
+
+## 3. HSTS — não exigir em `next.config` à cegas
+
+- **Vercel / muitos CDNs** aplicam HSTS na borda em produção HTTPS — ausência no `next.config` é **normal**.
+- **Desenvolvimento local** (`next dev`) não deve receber HSTS agressivo sem necessidade.
+- Se o relatório mencionar HSTS: indicar **“confirmar no painel do host/CDN”**, não só “adicione ao next.config”.
+
+---
+
+## 4. CSP e Next.js — por que sugestões genéricas falham
+
+CSP estrita costuma quebrar:
+
+- Scripts inline do Next (hydration, RSC payloads em algumas versões)
+- `style` inline (Tailwind, libraries UI)
+- OAuth redirects (Auth.js / `next-auth` providers)
+- `https://js.stripe.com`, `https://hooks.stripe.com` (webhooks são server-side; **Stripe.js** no cliente precisa de domínios na CSP)
+- Imagens: `res.cloudinary.com`, `lh3.googleusercontent.com`, `avatars.githubusercontent.com` — alinhar com `images.remotePatterns` já no config
+- `next/font`, `next/script` com `strategy`
+
+**Ao sugerir CSP (só se usuário pedir hardening ou INFO detalhado):**
+
+1. Citar **next@&lt;versão instalada&gt;** no texto da recomendação
+2. Propor rollout **gradual** (report-only → nonce/hash → enforce)
+3. Listar domínios já usados no projeto (grep `https://`, providers em `auth.ts`, Stripe, Cloudinary)
+4. Avisar: **testar `npm run build && npm start`** — CSP quebra produção sem aparecer em dev
+5. Alternativa mais segura em muitos apps: CSP no **reverse proxy/CDN**, não duplicar mal no `next.config`
+
+---
+
+## 5. API de `headers` no `next.config` — depende da versão
+
+A forma canônica evoluiu entre majors (Pages vs App Router, `async headers()`, tipos `NextConfig`).
+
+**Antes de propor código:**
+
+- Ler [headers config](https://nextjs.org/docs/app/api-reference/config/next-config-js/headers) compatível com a **major instalada** (Context7: `/vercel/next.js` + versão do lockfile)
+- Confirmar se o projeto usa **App Router** (`app/`) — exemplo Pages Router de tutoriais antigos **não** aplicar
+- `next.config.ts` com `satisfies NextConfig` / `import type { NextConfig }` — manter o estilo do arquivo existente
+
+**Não sugerir** `experimental` ou chaves removidas na versão instalada (ex.: opções que migraram de `experimental` para top-level no Next 15+ — checar o arquivo real e a doc da mesma major).
+
+---
+
+## 6. Onde headers podem já existir (não reportar “ausência”)
+
+| Fonte           | Exemplos                                                                         |
+| --------------- | -------------------------------------------------------------------------------- |
+| Plataforma      | Vercel security headers, Cloudflare managed rules                                |
+| `proxy.ts` / `middleware.ts` | Redirects otimistas, headers na borda (ver versão do Next) |
+| Route Handler   | `NextResponse` com headers pontuais                                              |
+| Meta / React 19 | Alguns hints de recurso — não substituem CSP completa, mas não é “zero proteção” |
+
+Se não estiver no repositório, escrever no relatório: _“Headers na borda não auditáveis neste scan estático.”_
+
+---
+
+## 7. Texto modelo para relatório (INFO)
+
+Use quando quiser registrar hardening sem alarme:
+
+```
+⚪ INFO — Headers de segurança custom (next.config / proxy ou middleware)
+
+  next@<instalado> — next.config.ts sem função headers() para CSP/HSTS.
+  HSTS pode estar no CDN/host (Vercel, etc.) — não verificável só pelo repo.
+  CSP custom em Next exige allowlist por versão e por integrações (Auth.js, Stripe, …);
+  não recomendado copiar snippet de outra versão do Next sem teste de build/prod.
+
+  Próximo passo (opcional): definir política no CDN ou CSP report-only após inventariar scripts externos.
+  Confiança: LOW
+```
+
+---
+
+## 8. Quando ESCALAR além de INFO
+
+Subir para **MEDIUM+** apenas se houver evidência combinada:
+
+- XSS stored/reflected **confirmado** + CSP ausente ou `unsafe-inline` em páginas autenticadas
+- API com cookies de sessão + `Access-Control-Allow-Origin: *` + `credentials` (ver CORS, não só CSP)
+- `X-Frame-Options: ALLOWALL` ou equivalente em rotas de pagamento/admin
+
+---
+
+## 9. Integração com falsos positivos
+
+Entradas relacionadas em `refs/false-positives.md` § Next.js e § Severidade — aplicar **ambos** antes de publicar o achado.
+</file>
+
+<file path="src/config/scalar-config.ts">
+export const renderScalar = (openapiSpecification: any) => `
+  <!doctype html>
+  <html>
+    <head>
+      <title>Syngate API Reference</title>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <style>
+        body { margin: 0; }
+      </style>
+    </head>
+    <body>
+      <script
+        id="api-reference"
+        data-configuration='${JSON.stringify({
+          spec: { content: openapiSpecification },
+          theme: 'deepSpace',
+          layout: 'modern',
+        })}'></script>
+      <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+    </body>
+  </html>
+`;
+</file>
+
+<file path="src/lib/prisma.ts">
+import { PrismaClient } from '@prisma/client';
+import { Pool } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
+
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  throw new Error('[Erro Fatal] DATABASE_URL não definida no ambiente.');
+}
+
+const pool = new Pool({ connectionString });
+const adapter = new PrismaPg(pool);
+
+const globalForPrisma = global as unknown as { prisma: PrismaClient };
+
+export const prisma =
+  globalForPrisma.prisma ||
+  new PrismaClient({
+    adapter,
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma;
+}
+</file>
+
+<file path="src/lib/redis.ts">
+import { Redis } from 'ioredis';
+
+const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+
+const globalForRedis = global as unknown as { redis: Redis };
+
+export const redis =
+  globalForRedis.redis ||
+  new Redis(redisUrl, {
+    maxRetriesPerRequest: null,
+    retryStrategy(times) {
+      const delay = Math.min(times * 50, 2000);
+      return delay;
+    },
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForRedis.redis = redis;
+}
+
+redis.on('error', (err) => {
+  console.error('[Redis Error] Falha na conexão com o Redis:', err);
+});
+
+redis.on('connect', () => {
+  console.log('[Redis] Conectado com sucesso.');
+});
+</file>
+
+<file path="src/lib/socket.gateway.ts">
+import { Server as SocketIOServer } from 'socket.io';
+import { Server as HttpServer } from 'http';
+import { systemEvents } from '../shared/utils/events';
+
+export class SocketGateway {
+  private io: SocketIOServer;
+
+  constructor(server: HttpServer) {
+    this.io = new SocketIOServer(server, {
+      cors: {
+        origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+        methods: ['GET', 'POST'],
+      },
+    });
+
+    this.setupListeners();
+  }
+
+  private setupListeners() {
+    this.io.on('connection', (socket) => {
+      console.log(`[Socket.io] Cliente conectado: ${socket.id}`);
+
+      socket.on('disconnect', () => {
+        console.log(`[Socket.io] Cliente desconectado: ${socket.id}`);
+      });
+    });
+
+    systemEvents.on('access:new', (log) => {
+      this.io.emit('access:new', log);
+    });
+  }
+}
+</file>
+
+<file path="src/modules/access/access.controller.ts">
+import { Request, Response } from 'express';
+import { AccessService } from './access.service';
+
+export class AccessController {
+  private accessService = new AccessService();
+
+  process = async (req: Request, res: Response) => {
+    // O req.device é garantido pelo device.middleware.ts! Se chegou aqui, a placa é autêntica.
+    const dispositivoId = req.device!.id;
+    const { uidCartao, direcao, finalidade } = req.body;
+
+    const result = await this.accessService.processAccess({
+      uidCartao,
+      direcao,
+      finalidade,
+      dispositivoId,
+    });
+
+    // Retorna exatamente a estrutura que a placa espera: { granted: boolean, reason: string }
+    return res.status(200).json(result);
+  };
+}
+</file>
+
+<file path="src/modules/access/access.routes.ts">
+import { Router } from 'express';
+import { AccessController } from './access.controller';
+import { deviceMiddleware } from '../../shared/middlewares/device.middleware';
+import { validate } from '../../shared/middlewares/validate.middlewares';
+import { accessLogSchema } from '../../schemas/access-log.schema';
+
+const router = Router();
+const accessController = new AccessController();
+
+// Endpoint de acesso exclusivo das placas (protegido por hardware keys)
+router.post(
+  '/',
+  deviceMiddleware,
+  validate(accessLogSchema),
+  accessController.process
+);
+
+export { router as accessRouter };
+</file>
 
 <file path="src/modules/devices/devices.controller.ts">
 import { Request, Response } from 'express';
@@ -315,343 +2009,132 @@ export class DevicesService {
 }
 </file>
 
-<file path="src/schemas/device.schema.ts">
-import { z } from 'zod';
-import { TipoDispositivo, StatusDispositivo } from '@prisma/client';
+<file path="src/modules/reports/reports.controller.ts">
+import { Request, Response } from 'express';
+import { ReportsService } from './reports.service';
 
-const macRegex = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/;
+export class ReportsController {
+  private reportsService = new ReportsService();
 
-export const createDeviceSchema = z.object({
-  body: z.object({
-    nome: z.string().min(3, 'O nome do dispositivo deve ter no mínimo 3 caracteres.'),
-    tipo: z.nativeEnum(TipoDispositivo).optional(),
-    enderecoMac: z.string()
-      .toUpperCase()
-      .regex(macRegex, 'O endereço MAC deve estar no formato AA:BB:CC:DD:EE:FF.'),
-    salaId: z.string().uuid('ID da sala inválida. É obrigatório vincular a uma sala.'),
-    ipLocal: z.string().ip('Formato de IP local inválido.').optional(),
-  }),
-});
+  getDashboardData = async (req: Request, res: Response) => {
+    const report = await this.reportsService.getAccessReport(req.query);
+    return res.status(200).json({ status: 'success', data: report });
+  };
 
-export const updateDeviceSchema = z.object({
-  body: z.object({
-    nome: z.string().min(3).optional(),
-    tipo: z.nativeEnum(TipoDispositivo).optional(),
-    status: z.nativeEnum(StatusDispositivo).optional(),
-    enderecoMac: z.string().toUpperCase().regex(macRegex).optional(),
-    salaId: z.string().uuid().optional(),
-    ipLocal: z.string().ip().optional(),
-  }).strict(),
-  params: z.object({
-    id: z.string().uuid('ID do dispositivo inválido.'),
-  }),
-});
+  downloadCSV = async (req: Request, res: Response) => {
+    const csvString = await this.reportsService.generateCSV(req.query);
+
+    // Define os headers exigidos pelos Critérios de Aceite para forçar o download
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="relatorio-acessos-${Date.now()}.csv"`);
+    
+    return res.status(200).send(csvString);
+  };
+}
 </file>
 
-<file path="src/shared/middlewares/device.middleware.ts">
-import { Request, Response, NextFunction } from 'express';
+<file path="src/modules/reports/reports.routes.ts">
+import { Router } from 'express';
+import { ReportsController } from './reports.controller';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
+import { roleMiddleware } from '../../shared/middlewares/role.middleware';
+import { PapelUsuario } from '@prisma/client';
+
+const router = Router();
+const reportsController = new ReportsController();
+
+router.use(authMiddleware);
+
+const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
+router.use(roleMiddleware(adminRoles));
+
+router.get('/dashboard', reportsController.getDashboardData);
+router.get('/export/csv', reportsController.downloadCSV);
+
+export { router as reportsRouter };
+</file>
+
+<file path="src/modules/reports/reports.service.ts">
 import { prisma } from '../../lib/prisma';
-import { hashDeviceKey } from '../utils/device-key';
+import { redis } from '../../lib/redis';
+import { stringify } from 'csv-stringify/sync';
+import { ReportFilters } from '../../shared/types/report.types';
 
-export const deviceMiddleware = async (req: Request, res: Response, next: NextFunction) => {
-  const mac = req.headers['x-device-mac'] as string;
-  const key = req.headers['x-device-key'] as string;
+export class ReportsService {
+  async getAccessReport(filters: ReportFilters) {
+    // 1. Gera uma chave única para o cache baseada nos filtros
+    const cacheKey = `relatorio:acessos:${JSON.stringify(filters)}`;
 
-  if (!mac || !key) {
-    return res.status(403).json({ status: 'error', message: 'Credenciais do dispositivo ausentes.' });
+    // 2. Tenta buscar do Redis primeiro
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      return JSON.parse(cachedData);
+    }
+
+    // 3. Constrói a query de filtro dinamicamente
+    const whereClause: any = {};
+    
+    if (filters.dataInicio || filters.dataFim) {
+      whereClause.dataHora = {};
+      if (filters.dataInicio) whereClause.dataHora.gte = new Date(filters.dataInicio);
+      if (filters.dataFim) whereClause.dataHora.lte = new Date(filters.dataFim);
+    }
+    if (filters.usuarioId) whereClause.usuarioId = filters.usuarioId;
+    if (filters.dispositivoId) whereClause.dispositivoId = filters.dispositivoId;
+    if (filters.status) whereClause.status = filters.status;
+
+    // 4. Executa a busca crua e as agregações em paralelo
+    const [logs, totalPorStatus, totalPorDirecao] = await Promise.all([
+      prisma.logAcesso.findMany({
+        where: whereClause,
+        include: {
+          usuario: { select: { nome: true, matricula: true, papel: true } },
+          dispositivo: { select: { nome: true, sala: { select: { nome: true, bloco: true } } } },
+        },
+        orderBy: { dataHora: 'desc' },
+      }),
+      prisma.logAcesso.groupBy({ by: ['status'], _count: true, where: whereClause }),
+      prisma.logAcesso.groupBy({ by: ['direcao'], _count: true, where: whereClause })
+    ]);
+
+    // 5. Monta o objeto final de resposta
+    const reportData = {
+      resumo: {
+        totalAcessos: logs.length,
+        porStatus: totalPorStatus,
+        porDirecao: totalPorDirecao,
+      },
+      detalhes: logs,
+    };
+
+    // 6. Salva no Redis com TTL de 5 minutos (300 segundos)
+    await redis.set(cacheKey, JSON.stringify(reportData), 'EX', 300);
+
+    return reportData;
   }
 
-  try {
-    const device = await prisma.dispositivo.findUnique({
-      where: { enderecoMac: mac },
-    });
+  async generateCSV(filters: ReportFilters): Promise<string> {
+    const report = await this.getAccessReport(filters);
 
-    if (!device || !device.hashChaveSeguranca || device.status !== 'ATIVO') {
-      return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
-    }
+    // Mapeia os dados para um formato plano adequado para planilhas
+    const flatData = report.detalhes.map((log: any) => ({
+      'Data e Hora': new Date(log.dataHora).toLocaleString('pt-BR'),
+      'Status': log.status,
+      'Direção': log.direcao,
+      'Finalidade': log.finalidade,
+      'Usuário': log.usuario?.nome || 'Não Registrado',
+      'Matrícula': log.usuario?.matricula || '-',
+      'Papel': log.usuario?.papel || '-',
+      'Dispositivo': log.dispositivo?.nome || '-',
+      'Sala': log.dispositivo?.sala?.nome || '-',
+      'UID Cartão': log.uidCartao,
+      'Motivo Negação': log.motivo || '-',
+    }));
 
-    if (device.hashChaveSeguranca !== hashDeviceKey(key)) {
-      return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
-    }
-
-    req.device = device;
-    return next();
- } catch (error) {
-  return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
+    // Gera a string CSV com cabeçalhos automáticos
+    return stringify(flatData, { header: true, delimiter: ';' });
+  }
 }
-};
-</file>
-
-<file path=".husky/commit-msg">
-npx --no -- commitlint --edit "$1"
-</file>
-
-<file path="prisma/migrations/20260524180949_initial_schema/migration.sql">
--- Migration: initial_schema
--- Schema completo do Syngate — tabelas, enums, índices e extensões numa migration só
-
--- ─── Extensões ───────────────────────────────────────────────────────────────
-
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
--- ─── Enums ───────────────────────────────────────────────────────────────────
-
-CREATE TYPE "PapelUsuario" AS ENUM (
-  'ALUNO',
-  'PROFESSOR',
-  'FUNCIONARIO',
-  'COORDENADOR',
-  'GESTOR',
-  'VISITANTE'
-);
-
-CREATE TYPE "TipoDispositivo" AS ENUM (
-  'CATRACA',
-  'LEITOR_CARTAO'
-);
-
-CREATE TYPE "StatusAcesso" AS ENUM (
-  'CONCEDIDO',
-  'NEGADO'
-);
-
-CREATE TYPE "FinalidadeLog" AS ENUM (
-  'ENTRADA_PREDIO',
-  'PRESENCA_SALA'
-);
-
-CREATE TYPE "DirecaoAcesso" AS ENUM (
-  'ENTRADA',
-  'SAIDA'
-);
-
-CREATE TYPE "StatusDispositivo" AS ENUM (
-  'ATIVO',
-  'INATIVO',
-  'MANUTENCAO'
-);
-
-CREATE TYPE "TipoToken" AS ENUM (
-  'CHAVE_API',
-  'REFRESH',
-  'APP'
-);
-
--- ─── Tabelas ─────────────────────────────────────────────────────────────────
-
-CREATE TABLE "turnos" (
-  "id"         TEXT NOT NULL,
-  "nome"       TEXT NOT NULL,
-  "horaInicio" INTEGER NOT NULL,
-  "horaFim"    INTEGER NOT NULL,
-  "diasSemana" INTEGER[],
-  CONSTRAINT "turnos_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "usuarios" (
-  "id"               TEXT NOT NULL,
-  "nome"             TEXT NOT NULL,
-  "email"            TEXT NOT NULL,
-  "hashSenha"        TEXT NOT NULL,
-  "matricula"        TEXT,
-  "cartaoId"         TEXT,
-  "curso"            TEXT,
-  "papel"            "PapelUsuario" NOT NULL DEFAULT 'ALUNO',
-  "ativo"            BOOLEAN NOT NULL DEFAULT true,
-  "dataExpiracao"    TIMESTAMP(3),
-  "emailVerificado"  BOOLEAN NOT NULL DEFAULT false,
-  "tokenVerificacao" TEXT,
-  "turnoId"          TEXT,
-  "criadoEm"         TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "atualizadoEm"     TIMESTAMP(3) NOT NULL,
-  CONSTRAINT "usuarios_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "tokens" (
-  "id"            TEXT NOT NULL,
-  "tipo"          "TipoToken" NOT NULL,
-  "hash"          TEXT NOT NULL,
-  "dataExpiracao" TIMESTAMP(3),
-  "revogado"      BOOLEAN NOT NULL DEFAULT false,
-  "usuarioId"     TEXT NOT NULL,
-  "criadoEm"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "tokens_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "salas" (
-  "id"    TEXT NOT NULL,
-  "nome"  TEXT NOT NULL,
-  "bloco" TEXT,
-  CONSTRAINT "salas_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "dispositivos" (
-  "id"                 TEXT NOT NULL,
-  "nome"               TEXT NOT NULL,
-  "tipo"               "TipoDispositivo"   NOT NULL DEFAULT 'LEITOR_CARTAO',
-  "status"             "StatusDispositivo" NOT NULL DEFAULT 'ATIVO',
-  "enderecoMac"        TEXT,
-  "hashChaveSeguranca" TEXT,
-  "ipLocal"            TEXT,
-  "salaId"             TEXT NOT NULL,
-  CONSTRAINT "dispositivos_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "logs_acesso" (
-  "id"            TEXT NOT NULL,
-  "dataHora"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "status"        "StatusAcesso" NOT NULL,
-  "finalidade"    "FinalidadeLog"   NOT NULL DEFAULT 'ENTRADA_PREDIO',
-  "direcao"       "DirecaoAcesso"   NOT NULL DEFAULT 'ENTRADA',
-  "motivo"        TEXT,
-  "usuarioId"     TEXT,
-  "uidCartao"     TEXT,
-  "dispositivoId" TEXT NOT NULL,
-  CONSTRAINT "logs_acesso_pkey" PRIMARY KEY ("id")
-);
-
--- ─── Unique Constraints ───────────────────────────────────────────────────────
-
-CREATE UNIQUE INDEX "usuarios_email_key"            ON "usuarios"("email");
-CREATE UNIQUE INDEX "usuarios_matricula_key"         ON "usuarios"("matricula");
-CREATE UNIQUE INDEX "usuarios_cartaoId_key"          ON "usuarios"("cartaoId");
-CREATE UNIQUE INDEX "usuarios_tokenVerificacao_key"  ON "usuarios"("tokenVerificacao");
-CREATE UNIQUE INDEX "tokens_hash_key"                ON "tokens"("hash");
-CREATE UNIQUE INDEX "salas_nome_bloco_key"           ON "salas"("nome", "bloco");
-CREATE UNIQUE INDEX "dispositivos_enderecoMac_key"   ON "dispositivos"("enderecoMac");
-
--- ─── Índices B-Tree (performance em filtros comuns) ───────────────────────────
-
-CREATE INDEX "tokens_usuarioId_idx"                    ON "tokens"("usuarioId");
-CREATE INDEX "logs_acesso_dataHora_idx"                ON "logs_acesso"("dataHora");
-CREATE INDEX "logs_acesso_usuarioId_dataHora_idx"      ON "logs_acesso"("usuarioId", "dataHora");
-CREATE INDEX "logs_acesso_dispositivoId_dataHora_idx"  ON "logs_acesso"("dispositivoId", "dataHora");
-CREATE INDEX "logs_acesso_usuarioId_status_idx"        ON "logs_acesso"("usuarioId", "status");
-
--- ─── Índices GIN pg_trgm (buscas ILIKE performáticas) ────────────────────────
-
-CREATE INDEX "idx_usuarios_nome_trgm"  ON "usuarios" USING GIN ("nome"  gin_trgm_ops);
-CREATE INDEX "idx_usuarios_email_trgm" ON "usuarios" USING GIN ("email" gin_trgm_ops);
-
--- ─── Foreign Keys ─────────────────────────────────────────────────────────────
-
-ALTER TABLE "usuarios" ADD CONSTRAINT "usuarios_turnoId_fkey"
-  FOREIGN KEY ("turnoId") REFERENCES "turnos"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
-
-ALTER TABLE "tokens" ADD CONSTRAINT "tokens_usuarioId_fkey"
-  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
-  ON DELETE CASCADE ON UPDATE CASCADE;
-
-ALTER TABLE "dispositivos" ADD CONSTRAINT "dispositivos_salaId_fkey"
-  FOREIGN KEY ("salaId") REFERENCES "salas"("id")
-  ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_usuarioId_fkey"
-  FOREIGN KEY ("usuarioId") REFERENCES "usuarios"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
-
-ALTER TABLE "logs_acesso" ADD CONSTRAINT "logs_acesso_dispositivoId_fkey"
-  FOREIGN KEY ("dispositivoId") REFERENCES "dispositivos"("id")
-  ON DELETE CASCADE ON UPDATE CASCADE;
-</file>
-
-<file path="prisma/migrations/20260524182854_sync_gin_indexes/migration.sql">
--- RenameIndex
-ALTER INDEX "idx_usuarios_email_trgm" RENAME TO "usuarios_email_idx";
-
--- RenameIndex
-ALTER INDEX "idx_usuarios_nome_trgm" RENAME TO "usuarios_nome_idx";
-</file>
-
-<file path="prisma/migrations/migration_lock.toml">
-# Please do not edit this file manually
-# It should be added in your version-control system (e.g., Git)
-provider = "postgresql"
-</file>
-
-<file path="src/config/scalar-config.ts">
-export const renderScalar = (openapiSpecification: any) => `
-  <!doctype html>
-  <html>
-    <head>
-      <title>Syngate API Reference</title>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <style>
-        body { margin: 0; }
-      </style>
-    </head>
-    <body>
-      <script
-        id="api-reference"
-        data-configuration='${JSON.stringify({
-          spec: { content: openapiSpecification },
-          theme: 'deepSpace',
-          layout: 'modern',
-        })}'></script>
-      <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-    </body>
-  </html>
-`;
-</file>
-
-<file path="src/lib/prisma.ts">
-import { PrismaClient } from '@prisma/client';
-import { Pool } from 'pg';
-import { PrismaPg } from '@prisma/adapter-pg';
-
-const connectionString = process.env.DATABASE_URL;
-
-if (!connectionString) {
-  throw new Error('[Erro Fatal] DATABASE_URL não definida no ambiente.');
-}
-
-const pool = new Pool({ connectionString });
-const adapter = new PrismaPg(pool);
-
-const globalForPrisma = global as unknown as { prisma: PrismaClient };
-
-export const prisma =
-  globalForPrisma.prisma ||
-  new PrismaClient({
-    adapter,
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-  });
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = prisma;
-}
-</file>
-
-<file path="src/lib/redis.ts">
-import { Redis } from 'ioredis';
-
-const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-
-const globalForRedis = global as unknown as { redis: Redis };
-
-export const redis =
-  globalForRedis.redis ||
-  new Redis(redisUrl, {
-    maxRetriesPerRequest: null,
-    retryStrategy(times) {
-      const delay = Math.min(times * 50, 2000);
-      return delay;
-    },
-  });
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForRedis.redis = redis;
-}
-
-redis.on('error', (err) => {
-  console.error('[Redis Error] Falha na conexão com o Redis:', err);
-});
-
-redis.on('connect', () => {
-  console.log('[Redis] Conectado com sucesso.');
-});
 </file>
 
 <file path="src/modules/rooms/rooms.controller.ts">
@@ -964,6 +2447,19 @@ export class UsersController {
 }
 </file>
 
+<file path="src/schemas/access-log.schema.ts">
+import { z } from 'zod';
+import { DirecaoAcesso, FinalidadeLog } from '@prisma/client';
+
+export const accessLogSchema = z.object({
+  body: z.object({
+    uidCartao: z.string().min(1, 'UID do cartão é obrigatório.'),
+    direcao: z.nativeEnum(DirecaoAcesso).default(DirecaoAcesso.ENTRADA),
+    finalidade: z.nativeEnum(FinalidadeLog).default(FinalidadeLog.ENTRADA_PREDIO),
+  }),
+});
+</file>
+
 <file path="src/schemas/auth.schema.ts">
 import { z } from 'zod';
 import { PapelUsuario } from '@prisma/client';
@@ -987,6 +2483,39 @@ export const cadastroSchema = z.object({
 export const refreshTokenSchema = z.object({
   body: z.object({
     refreshToken: z.string().min(1, 'Refresh token é obrigatório.'),
+  }),
+});
+</file>
+
+<file path="src/schemas/device.schema.ts">
+import { z } from 'zod';
+import { TipoDispositivo, StatusDispositivo } from '@prisma/client';
+
+const macRegex = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/;
+
+export const createDeviceSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3, 'O nome do dispositivo deve ter no mínimo 3 caracteres.'),
+    tipo: z.nativeEnum(TipoDispositivo).optional(),
+    enderecoMac: z.string()
+      .toUpperCase()
+      .regex(macRegex, 'O endereço MAC deve estar no formato AA:BB:CC:DD:EE:FF.'),
+    salaId: z.string().uuid('ID da sala inválida. É obrigatório vincular a uma sala.'),
+    ipLocal: z.string().ip('Formato de IP local inválido.').optional(),
+  }),
+});
+
+export const updateDeviceSchema = z.object({
+  body: z.object({
+    nome: z.string().min(3).optional(),
+    tipo: z.nativeEnum(TipoDispositivo).optional(),
+    status: z.nativeEnum(StatusDispositivo).optional(),
+    enderecoMac: z.string().toUpperCase().regex(macRegex).optional(),
+    salaId: z.string().uuid().optional(),
+    ipLocal: z.string().ip().optional(),
+  }).strict(),
+  params: z.object({
+    id: z.string().uuid('ID do dispositivo inválido.'),
   }),
 });
 </file>
@@ -1090,6 +2619,40 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
 };
 </file>
 
+<file path="src/shared/middlewares/device.middleware.ts">
+import { Request, Response, NextFunction } from 'express';
+import { prisma } from '../../lib/prisma';
+import { hashDeviceKey } from '../utils/device-key';
+
+export const deviceMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  const mac = req.headers['x-device-mac'] as string;
+  const key = req.headers['x-device-key'] as string;
+
+  if (!mac || !key) {
+    return res.status(403).json({ status: 'error', message: 'Credenciais do dispositivo ausentes.' });
+  }
+
+  try {
+    const device = await prisma.dispositivo.findUnique({
+      where: { enderecoMac: mac },
+    });
+
+    if (!device || !device.hashChaveSeguranca || device.status !== 'ATIVO') {
+      return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
+    }
+
+    if (device.hashChaveSeguranca !== hashDeviceKey(key)) {
+      return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
+    }
+
+    req.device = device;
+    return next();
+ } catch (error) {
+  return res.status(403).json({ status: 'error', message: 'Acesso negado.' });
+}
+};
+</file>
+
 <file path="src/shared/middlewares/error.middleware.ts">
 import { Request, Response, NextFunction } from 'express';
 
@@ -1189,17 +2752,6 @@ export const validate = (schema: AnyZodObject) => {
 };
 </file>
 
-<file path="src/shared/types/access-log.types.ts">
-import { LogAcesso } from '@prisma/client';
-
-export type LogAcessoDTO = Omit<LogAcesso, 'id'>;
-
-export interface AccessResult {
-  granted: boolean;
-  reason: string;
-}
-</file>
-
 <file path="src/shared/types/auth.types.ts">
 import { PapelUsuario } from '@prisma/client';
 
@@ -1226,34 +2778,6 @@ export interface TokenResponse {
 }
 </file>
 
-<file path="src/shared/types/device.types.ts">
-import { Dispositivo, TipoDispositivo, StatusDispositivo } from '@prisma/client';
-
-export type DispositivoDTO = Omit<Dispositivo, 'hashChaveSeguranca' | 'logs'>;
-
-export interface DeviceAuthHeader {
-  'x-device-id': string;
-  'x-device-secret': string;
-}
-
-export interface CreateDevicePayload {
-  nome: string;
-  tipo?: TipoDispositivo;
-  enderecoMac: string;
-  salaId: string;
-  ipLocal?: string;
-}
-
-export interface UpdateDevicePayload {
-  nome?: string;
-  tipo?: TipoDispositivo;
-  status?: StatusDispositivo;
-  enderecoMac?: string;
-  salaId?: string;
-  ipLocal?: string;
-}
-</file>
-
 <file path="src/shared/types/express.d.ts">
 import { JwtPayload } from './auth.types';
 import { Dispositivo } from '@prisma/client';
@@ -1268,11 +2792,14 @@ declare global {
 }
 </file>
 
-<file path="src/shared/types/index.ts">
-export * from './user.types';
-export * from './auth.types';
-export * from './device.types';
-export * from './access-log.types';
+<file path="src/shared/types/report.types.ts">
+export interface ReportFilters {
+  dataInicio?: string;
+  dataFim?: string;
+  usuarioId?: string;
+  dispositivoId?: string;
+  status?: string;
+}
 </file>
 
 <file path="src/shared/types/shift.types.ts">
@@ -1327,6 +2854,13 @@ export function generateDeviceKey(): string {
 export function hashDeviceKey(key: string): string {
   return crypto.createHash('sha256').update(key).digest('hex');
 }
+</file>
+
+<file path="src/shared/utils/events.ts">
+import { EventEmitter } from 'events';
+
+// Instância global para comunicação interna da aplicação
+export const systemEvents = new EventEmitter();
 </file>
 
 <file path="src/shared/utils/hash.ts">
@@ -1422,6 +2956,395 @@ SOFTWARE.
 
 </file>
 
+<file path="SECURITY_AUDIT.md">
+# 📋 RELATÓRIO DE AUDITORIA DE SEGURANÇA - SYNGATE-BACKEND
+
+**Data:** 03 de Junho de 2026  
+**Ferramenta:** Security Audit Skill (Copilot CLI)  
+**Status:** 🔴 **CRÍTICO** - Ação necessária
+
+---
+
+## 🎯 RESUMO EXECUTIVO
+
+- ✅ **Arquitetura:** Bem estruturada com separação de camadas
+- ✅ **Autenticação:** JWT com 15m expiration implementado
+- ✅ **Rate Limiting:** Configurado em Redis (100 reqs/15min global)
+- 🟡 **Código:** 2 issues encontradas (IDOR, JWT fallback)
+- 🔴 **Dependências:** 14 vulnerabilidades (1 HIGH, 13 MODERATE)
+
+---
+
+## 📊 DETALHES
+
+### 1. DEPENDÊNCIAS COM VULNERABILIDADES 🔴 CRÍTICO
+
+#### ⚠️ HIGH SEVERITY
+- **cloudinary** < 2.7.0
+  - **CVE:** Arbitrary Argument Injection via `&` em parâmetros
+  - **Fix:** `npm install cloudinary@^2.10.0`
+
+#### 🟡 MODERATE SEVERITY
+
+| Pacote | Problema | Fix |
+|--------|----------|-----|
+| @hono/node-server | Middleware bypass via repeated slashes | `npm audit fix` |
+| dompurify | 8 CVEs de XSS e prototype pollution | `npm audit fix` |
+| ws | Uninitialized memory disclosure | Atualizar socket.io |
+| qs | DoS via null/undefined em arrays | `npm audit fix` |
+
+**Comando para resolver:**
+```bash
+npm audit fix --force
+npm install cloudinary@^2.10.0
+npm audit
+```
+
+---
+
+### 2. PROTEÇÃO CONTRA IDOR 🟡 ATENÇÃO
+
+**Arquivo:** `src/modules/users/users.controller.ts`
+
+**Vulnerabilidade:** Qualquer GESTOR pode acessar/editar dados de outro usuário
+
+**Código vulnerável:**
+```typescript
+// ❌ RISCO
+findById = async (req: Request, res: Response) => {
+  const id = req.params.id as string; // Sem verificar se é o próprio usuário
+  const user = await this.usersService.findById(id);
+  return res.status(200).json({ status: 'success', data: user });
+};
+
+update = async (req: Request, res: Response) => {
+  const id = req.params.id as string; // Mesmo problema aqui
+  const user = await this.usersService.update(id, req.body);
+  return res.status(200).json({ status: 'success', data: user });
+};
+```
+
+**Ataque possível:**
+```bash
+# Qualquer GESTOR/COORDENADOR pode fazer:
+GET /api/v1/users/outro-usuario-id
+PUT /api/v1/users/outro-usuario-id -d '{"role": "ADMIN"}'
+```
+
+**Solução recomendada:**
+- ✅ Alunos só podem acessar/editar sua própria conta (`/me`)
+- ✅ Gestores/Coordenadores podem gerenciar outros
+- ✅ Admin pode gerenciar todos
+
+---
+
+### 3. JWT_SECRET SEM FALLBACK SEGURO 🟡 ATENÇÃO
+
+**Arquivo:** `src/modules/auth/auth.service.ts`
+
+**Código:**
+```typescript
+// ❌ RISCO em produção
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
+```
+
+**Problema:**
+- Se `JWT_SECRET` não estiver configurada em produção, usa um fallback
+- Tokens podem ser forjados com conhecimento da fallback string
+
+**Solução:**
+```typescript
+// ✅ CORRETO
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('❌ FATAL: JWT_SECRET não configurada. Configure a variável de ambiente.');
+}
+```
+
+---
+
+### 4. ✅ IMPLEMENTAÇÕES CORRETAS
+
+#### Zod Validation
+```typescript
+// ✅ Email e senha validados
+export const loginSchema = z.object({
+  body: z.object({
+    email: z.string().email('Formato de e-mail inválido.'),
+    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
+  }),
+});
+```
+
+#### Rate Limiting
+```typescript
+// ✅ Global: 100 reqs/IP em 15min
+// ✅ Auth: 10 reqs/IP em 15min
+// ✅ Armazenado em Redis para distribuição
+```
+
+#### Helmet Security Headers
+```typescript
+// ✅ CSP configurado
+// ✅ X-Frame-Options ativado
+// ✅ X-Content-Type-Options ativado
+```
+
+#### JWT & Token Expiration
+```typescript
+// ✅ Access Token: 15 minutos
+// ✅ Refresh Token: 7 dias
+// ✅ Logout: Blacklist em Redis com TTL
+```
+
+---
+
+## 🔧 PLANO DE AÇÃO
+
+### IMEDIATO (Fazer agora)
+- [ ] Atualizar `cloudinary` para ^2.10.0
+- [ ] Executar `npm audit fix`
+- [ ] Remover fallback do JWT_SECRET
+
+### CURTO PRAZO (Próxima semana)
+- [ ] Implementar IDOR protection no controller
+- [ ] Adicionar testes unitários para autenticação
+- [ ] Revisar logs de auditoria
+
+### LONGO PRAZO (Roadmap)
+- [ ] Implementar 2FA (Two-Factor Authentication)
+- [ ] Adicionar CSRF protection se houver forms
+- [ ] Monitoramento de segurança em produção
+
+---
+
+## 📝 NOTAS
+
+- **Scorecad:** 7/10 (Bom, mas com issues críticas)
+- **Próxima auditoria:** 30 dias
+- **Contato:** security@syngate.dev
+
+---
+
+*Auditoria realizada com Security Audit Skill - GitHub Copilot*
+</file>
+
+<file path="SKILL.md">
+---
+name: security-audit
+description: 'Auditoria de segurança multi-projeto para Next.js e React — usa versões instaladas (package.json + lockfile), npm audit, Auth.js, Prisma, Stripe quando presentes. Anti-falso-positivo. Use em "auditar segurança", XSS, IDOR, Server Actions, ou "/security-audit [path]".'
+---
+
+# Security Audit (React / Next.js / TypeScript)
+
+Scanner orientado a **pesquisador de segurança**: contexto, fluxo de dados e mitigações do **framework na versão que o projeto realmente usa** — não uma versão fixa global.
+
+**Idioma do relatório:** português (termos OWASP/CVE podem ficar em inglês).
+
+**Multi-repo:** cada execução começa lendo o `package.json` e lockfile **do repositório (ou subpath) auditado**. Funciona em Next 14–16+, React 18–19+, com ou sem Prisma/Stripe/Auth.js.
+
+## Princípios
+
+1. **Versão instalada > última lançada** — auditar CVEs e APIs na versão do lockfile; “há versão mais nova” é só **INFO** sem advisory
+2. **Evidência > padrão** — não reportar só por `dangerouslySetInnerHTML`, ausência de `middleware.ts` **em Next 16+** (usar `proxy.ts` — `refs/proxy-middleware.md`), ou CSP/HSTS ausente em `next.config`
+3. **Rastrear imports** — auth em helpers (`auth()`, wrappers, `canPermission`)
+4. **Auto-verificação** — `refs/false-positives.md` em todo achado
+5. **Patches só como proposta** — nunca aplicar no repo automaticamente
+
+## Fluxo de execução (ordem fixa)
+
+### Step 1 — Escopo, stack e versões
+
+1. Path informado → só esse escopo; senão → raiz do projeto (respeitar monorepo)
+2. **Obrigatório:** `refs/project-stack.md` — versões instaladas, router, deps presentes
+3. Comandos recomendados:
+   ```bash
+   npm ls next react react-dom --depth=0
+   ```
+   Lockfile: `package-lock.json` | `pnpm-lock.yaml` | `yarn.lock`
+4. Opcional (INFO no relatório):
+   ```bash
+   npm view next version && npm view react version
+   ```
+5. Aplicar gates de major (Next 14/15/16, React 18/19) de `project-stack.md` §4–5; se Next ≥ 16 → `refs/proxy-middleware.md`
+6. Carregar `refs/language.md` + mapear superfície em `refs/nextjs-checklist.md` §1
+
+### Step 2 — Dependências do projeto atual
+
+```bash
+npm audit --omit=dev
+```
+
+- CVE/GHSA apenas para pacotes **deste** lockfile
+- Versão citada = **instalada**, não range do `package.json`
+- Sem CVE → no máximo **INFO** (upgrade opcional)
+- Não reportar devDependencies sem uso em runtime
+
+### Step 3 — Segredos e exposição
+
+- `refs/secrets.md`
+- `git ls-files` para arquivos sensíveis **tracked**
+- CI/CD, `next.config`, Docker
+
+### Step 4 — Scan profundo (código)
+
+`refs/nextjs-checklist.md` — marcar itens conforme deps detectadas (ex.: sem Stripe → pular webhook).
+
+| Categoria   | Foco                                                  |
+| ----------- | ----------------------------------------------------- |
+| Injeção     | Prisma/Drizzle raw, XSS real, SSRF                    |
+| AuthZ/AuthN | Server Actions, `route.ts`, BOLA/IDOR, sessão         |
+| Dados       | PII em logs/API, rotas públicas                       |
+| Crypto      | tokens fracos, hash obsoleto                          |
+| Lógica      | webhooks, race, rate limit                            |
+| Config      | `NEXT_PUBLIC_*`, `allowedOrigins` (proxy); CSP/HSTS só via `refs/security-headers.md` |
+
+**Não** auditar Python/Java/Go salvo pedido explícito.
+
+### Step 5 — Fluxo entre arquivos
+
+Entrada → validação → auth → autorização → sink (DB, fetch, HTML, fs, pagamentos).
+
+Next ≥15: página protegida **não** substitui auth na Server Action.
+
+### Step 6 — Anti-falso-positivo
+
+`refs/false-positives.md` — descartar ou rebaixar; listar descartes no relatório.
+
+### Step 7 — Relatório
+
+`refs/report.md` — incluir bloco **Stack detectado** de `project-stack.md` §8.
+
+### Step 8 — Patches (CRITICAL e HIGH)
+
+Before/after; frase: **"Revise cada patch antes de aplicar. Nada foi alterado no repositório."**
+
+**Não** incluir patches de CSP/HSTS genéricos em `next.config` (hardening opcional → texto INFO em `refs/security-headers.md` §7, não Patch Proposals).
+
+## Guia de severidade
+
+| Nível    | Significado                                                      |
+| -------- | ---------------------------------------------------------------- |
+| CRITICAL | Exploração imediata (SQLi, RCE, bypass auth, secret live no Git) |
+| HIGH     | Exploit claro (IDOR, XSS stored, webhook sem assinatura)         |
+| MEDIUM   | Condições ou encadeamento (CSRF em proxy mal configurado)        |
+| LOW      | Boas práticas pontuais                                           |
+| INFO     | Sem CVE; versão atrás da latest; CSP/HSTS não custom no Next config |
+
+## Regras de saída
+
+- Tabela resumo primeiro
+- Achados por **categoria**
+- Path + linha + snippet
+- **Stack detectado (instalado)** sempre no cabeçalho
+- Comparar com latest só em INFO
+- Falsos positivos descartados quando houver
+
+## Referências
+
+| Arquivo                    | Uso                                    |
+| -------------------------- | -------------------------------------- |
+| `refs/project-stack.md`    | Step 1 — versões e gates (obrigatório) |
+| `refs/language.md`         | Padrões JS/TS/React/Next por major     |
+| `refs/nextjs-checklist.md` | Steps 4–5                              |
+| `refs/secrets.md`          | Step 3                                 |
+| `refs/false-positives.md`  | Step 6                                 |
+| `refs/security-headers.md` | CSP/HSTS — não patch genérico cross-version |
+| `refs/proxy-middleware.md` | Next ≥ 16: `proxy.ts`; Next &lt; 16: `middleware.ts` |
+| `refs/report.md`           | Step 7                                 |
+
+## Documentação externa (por versão instalada)
+
+Se precisar confirmar comportamento de segurança, consultar docs da **versão do projeto** (Context7: `/vercel/next.js` ou `/vercel/next.js/v<major>.<minor>.<patch>` mais próxima).
+
+## Atalhos grep (pistas, não achados)
+
+```
+dangerouslySetInnerHTML
+$queryRawUnsafe
+Prisma.sql
+'use server'
+export const GET = auth
+proxy.ts
+middleware.ts
+constructEvent
+sk_live_
+```
+
+Confirmar contexto antes de reportar.
+</file>
+
+<file path="src/modules/access/access.service.ts">
+import { prisma } from '../../lib/prisma';
+import { isWithinShift } from '../../shared/utils/shift-validator';
+import { systemEvents } from '../../shared/utils/events';
+import { DirecaoAcesso, FinalidadeLog, StatusAcesso } from '@prisma/client';
+import { AccessResult } from '../../shared/types/access-log.types';
+
+export interface ProcessAccessDTO {
+  uidCartao: string;
+  direcao: DirecaoAcesso;
+  finalidade: FinalidadeLog;
+  dispositivoId: string;
+}
+
+export class AccessService {
+  async processAccess(data: ProcessAccessDTO): Promise<AccessResult> {
+    let granted = false;
+    let reason: string | null = null;
+    let status: StatusAcesso = StatusAcesso.NEGADO;
+    let usuarioId: string | null = null;
+
+    // 1. Busca o usuário atrelado ao cartão (e traz as regras do turno dele)
+    const usuario = await prisma.usuario.findUnique({
+      where: { cartaoId: data.uidCartao },
+      include: { turno: true },
+    });
+
+    // 2. Validações baseadas na matriz de casos de teste da Task
+    if (!usuario) {
+      reason = 'Cartão não cadastrado';
+    } else {
+      usuarioId = usuario.id;
+
+      if (!usuario.ativo) {
+        reason = 'Usuário inativo';
+      } else if (usuario.dataExpiracao && usuario.dataExpiracao < new Date()) {
+        reason = 'Acesso expirado';
+      } else if (usuario.turno && !isWithinShift(new Date(), usuario.turno)) {
+        reason = 'Fora do horário permitido';
+      } else {
+        granted = true;
+        status = StatusAcesso.CONCEDIDO;
+      }
+    }
+
+    // 3. Grava o log rigorosamente (sempre salva o uidCartao bruto, mesmo se desconhecido)
+    const log = await prisma.logAcesso.create({
+      data: {
+        uidCartao: data.uidCartao,
+        dispositivoId: data.dispositivoId,
+        usuarioId,
+        status,
+        direcao: data.direcao,
+        finalidade: data.finalidade,
+        motivo: reason,
+      },
+      include: {
+        usuario: { select: { nome: true, matricula: true, papel: true } },
+        dispositivo: { select: { nome: true, salaId: true } },
+      },
+    });
+
+    // 4. Dispara o evento para o Dashboard via WebSockets (Socket.io)
+    systemEvents.emit('access:new', log);
+
+    // 5. Retorna o contrato estrito para a placa ESP32
+    return { granted, reason };
+  }
+}
+</file>
+
 <file path="src/modules/auth/auth.controller.ts">
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
@@ -1486,43 +3409,6 @@ export class AuthController {
     return res.status(204).send();
   };
 }
-</file>
-
-<file path="src/modules/auth/auth.routes.ts">
-import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
-import { RedisStore } from 'rate-limit-redis';
-import { redis } from '../../lib/redis';
-import { validate } from '../../middlewares/validate.middlewares';
-import { loginSchema, cadastroSchema, refreshTokenSchema } from '../../schemas/auth.schema';
-import { AuthController } from './auth.controller';
-import { authMiddleware } from '../../middlewares/auth.middleware';
-
-const router = Router();
-const authController = new AuthController();
-
-const authRateLimiter = rateLimit({
-  store: new RedisStore({
-    sendCommand: async (...args: string[]) => {
-      const [command, ...rest] = args;
-      return redis.call(command, ...rest) as any;
-    },
-    prefix: 'rl:auth:',
-  }),
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  message: { status: 'error', message: 'Muitas tentativas. Aguarde 15 minutos.' },
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-});
-
-router.post('/login',          authRateLimiter, validate(loginSchema),        authController.login);
-router.post('/cadastro',       authRateLimiter, validate(cadastroSchema),     authController.cadastro);
-router.get( '/verificar-email',                                                authController.verificarEmail);
-router.post('/refresh',                         validate(refreshTokenSchema), authController.refresh);
-router.post('/logout',         authMiddleware,                                 authController.logout);
-
-export { router as authRouter };
 </file>
 
 <file path="src/modules/shifts/shifts.controller.ts">
@@ -1707,33 +3593,51 @@ export const listUsersSchema = z.object({
 });
 </file>
 
-<file path="src/server.ts">
-import 'dotenv/config';
-import { app } from './app';
-import { prisma } from './lib/prisma';
+<file path="src/shared/types/access-log.types.ts">
+import { LogAcesso } from '@prisma/client';
 
-console.log('[Debug] Iniciando script de ignição...');
+export type LogAcessoDTO = Omit<LogAcesso, 'id'>;
 
-const PORT = process.env.PORT || 3333;
+export interface AccessResult {
+  granted: boolean;
+  reason: string | null;
+}
+</file>
 
-async function bootstrap() {
-  try {
-    console.log('[Debug] Tentando conectar ao Banco de Dados...');
-    
-    await prisma.$connect();
-    console.log('Successfully connected to Database via Prisma');
+<file path="src/shared/types/device.types.ts">
+import { Dispositivo, TipoDispositivo, StatusDispositivo } from '@prisma/client';
 
-    app.listen(PORT, () => {
-      console.log(`Syngate Backend running on http://localhost:${PORT}`);
-    });
-  } catch (error) {
-    console.error('[Erro Fatal] Falha ao iniciar o servidor:', error);
-    await prisma.$disconnect();
-    process.exit(1);
-  }
+export type DispositivoDTO = Omit<Dispositivo, 'hashChaveSeguranca' | 'logs'>;
+
+export interface DeviceAuthHeader {
+  'x-device-id': string;
+  'x-device-secret': string;
 }
 
-bootstrap();
+export interface CreateDevicePayload {
+  nome: string;
+  tipo?: TipoDispositivo;
+  enderecoMac: string;
+  salaId: string;
+  ipLocal?: string;
+}
+
+export interface UpdateDevicePayload {
+  nome?: string;
+  tipo?: TipoDispositivo;
+  status?: StatusDispositivo;
+  enderecoMac?: string;
+  salaId?: string;
+  ipLocal?: string;
+}
+</file>
+
+<file path="src/shared/types/index.ts">
+export * from './user.types';
+export * from './auth.types';
+export * from './device.types';
+export * from './access-log.types';
+export * from './report.types';
 </file>
 
 <file path=".gitignore">
@@ -2539,6 +4443,43 @@ export const openapiSpecification = {
 };
 </file>
 
+<file path="src/modules/auth/auth.routes.ts">
+import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
+import { redis } from '../../lib/redis';
+import { validate } from '../../shared/middlewares/validate.middlewares';
+import { loginSchema, cadastroSchema, refreshTokenSchema } from '../../schemas/auth.schema';
+import { AuthController } from './auth.controller';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
+
+const router = Router();
+const authController = new AuthController();
+
+const authRateLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: async (...args: string[]) => {
+      const [command, ...rest] = args;
+      return redis.call(command, ...rest) as any;
+    },
+    prefix: 'rl:auth:',
+  }),
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: { status: 'error', message: 'Muitas tentativas. Aguarde 15 minutos.' },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+
+router.post('/login',          authRateLimiter, validate(loginSchema),        authController.login);
+router.post('/cadastro',       authRateLimiter, validate(cadastroSchema),     authController.cadastro);
+router.get( '/verificar-email',                                                authController.verificarEmail);
+router.post('/refresh',                         validate(refreshTokenSchema), authController.refresh);
+router.post('/logout',         authMiddleware,                                 authController.logout);
+
+export { router as authRouter };
+</file>
+
 <file path="src/modules/users/users.routes.ts">
 import { Router } from 'express';
 import { UsersController } from './users.controller';
@@ -2571,6 +4512,44 @@ router.delete('/:id', usersController.delete);
 router.patch('/:id/cartao', validate(linkCardSchema), usersController.linkCard);
 
 export { router as usersRouter };
+</file>
+
+<file path="src/server.ts">
+import 'dotenv/config';
+import { createServer } from 'http';
+import { app } from './app';
+import { prisma } from './lib/prisma';
+import { SocketGateway } from './lib/socket.gateway';
+
+console.log('[Debug] Iniciando script de ignição...');
+
+const PORT = process.env.PORT || 3333;
+
+async function bootstrap() {
+  try {
+    console.log('[Debug] Tentando conectar ao Banco de Dados...');
+    
+    await prisma.$connect();
+    console.log('Successfully connected to Database via Prisma');
+
+    // Cria o servidor HTTP puro passando o app do Express
+    const httpServer = createServer(app);
+
+    // Instancia o Socket.io conectando-o ao servidor HTTP
+    new SocketGateway(httpServer);
+
+    // Inicia a escuta na porta configurada
+    httpServer.listen(PORT, () => {
+      console.log(`Syngate Backend running on http://localhost:${PORT}`);
+    });
+  } catch (error) {
+    console.error('[Erro Fatal] Falha ao iniciar o servidor:', error);
+    await prisma.$disconnect();
+    process.exit(1);
+  }
+}
+
+bootstrap();
 </file>
 
 <file path="tsconfig.json">
@@ -3174,6 +5153,8 @@ import { usersRouter } from './modules/users/users.routes';
 import { roomsRouter } from './modules/rooms/rooms.routes';
 import { shiftsRouter } from './modules/shifts/shifts.routes';
 import { devicesRouter } from './modules/devices/devices.routes';
+import { accessRouter } from './modules/access/access.routes';
+import { reportsRouter } from './modules/reports/reports.routes';
 
 const app = express();
 
@@ -3230,6 +5211,8 @@ app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/rooms', roomsRouter);
 app.use('/api/v1/shifts', shiftsRouter);
 app.use('/api/v1/devices', devicesRouter);
+app.use('/api/v1/access', accessRouter);
+app.use('/api/v1/reports', reportsRouter);
 
 // --- Middleware de Tratamento Global de Erros ---
 app.use(errorHandler);

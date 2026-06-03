@@ -3,12 +3,12 @@ export const openapiSpecification = {
   info: {
     title: 'Syngate API',
     version: '1.0.0',
-    description: 'Documentação Oficial do Back-end do Sistema Syngate (IoT & Web)',
+    description: 'Documentação Oficial do Back-end do Sistema Syngate (IoT & Web). Contém rotas administrativas para o Painel Web e rotas de alta performance para comunicação com o hardware das catracas (ESP32).',
   },
   servers: [
     {
       url: 'http://localhost:3333',
-      description: 'Servidor de Desenvolvimento',
+      description: 'Servidor de Desenvolvimento Local',
     },
   ],
   components: {
@@ -17,7 +17,19 @@ export const openapiSpecification = {
         type: 'http',
         scheme: 'bearer',
         bearerFormat: 'JWT',
-        description: 'Insira o Access Token JWT para acessar rotas protegidas.',
+        description: 'Insira o Access Token JWT obtido no login para acessar rotas da plataforma web.',
+      },
+      deviceMac: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'x-device-mac',
+        description: 'Endereço MAC físico do dispositivo IoT. Exemplo: AA:BB:CC:DD:EE:FF',
+      },
+      deviceKey: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'x-device-key',
+        description: 'Chave secreta gerada exclusivamente durante o provisionamento do dispositivo.',
       },
     },
     schemas: {
@@ -28,7 +40,7 @@ export const openapiSpecification = {
           nome: { type: 'string', example: 'João Estudante' },
           email: { type: 'string', format: 'email', example: 'joao@syngate.com' },
           matricula: { type: 'string', nullable: true, example: 'ALN2026' },
-          cartaoId: { type: 'string', nullable: true, example: 'A1:B2:C3:D4' },
+          cartaoId: { type: 'string', nullable: true, example: 'RFID-ALUN-002' },
           curso: { type: 'string', nullable: true, example: 'Análise e Desenvolvimento de Sistemas' },
           papel: { type: 'string', enum: ['ALUNO', 'PROFESSOR', 'FUNCIONARIO', 'COORDENADOR', 'GESTOR', 'VISITANTE'], example: 'ALUNO' },
           ativo: { type: 'boolean', example: true },
@@ -36,6 +48,43 @@ export const openapiSpecification = {
           turnoId: { type: 'string', format: 'uuid', nullable: true, example: 'aluno-manha' },
           criadoEm: { type: 'string', format: 'date-time', example: '2026-05-15T10:00:00.000Z' },
           atualizadoEm: { type: 'string', format: 'date-time', example: '2026-05-15T10:00:00.000Z' },
+        },
+      },
+      Sala: {
+        type: 'object',
+        required: ['nome'],
+        properties: {
+          id: { type: 'string', format: 'uuid', example: '876e4567-e89b-12d3-a456-426614174111' },
+          nome: { type: 'string', example: 'Laboratório 101' },
+          bloco: { type: 'string', nullable: true, example: 'A' },
+        },
+      },
+      Turno: {
+        type: 'object',
+        required: ['nome', 'horaInicio', 'horaFim', 'diasSemana'],
+        properties: {
+          id: { type: 'string', example: 'aluno-manha' },
+          nome: { type: 'string', example: 'Aluno - Manhã' },
+          horaInicio: { type: 'integer', description: 'Minutos desde a meia-noite (ex: 480 = 08:00)', example: 480 },
+          horaFim: { type: 'integer', description: 'Minutos desde a meia-noite (ex: 720 = 12:00)', example: 720 },
+          diasSemana: { 
+            type: 'array', 
+            items: { type: 'integer' }, 
+            description: '0 = Domingo, 1 = Segunda, ..., 6 = Sábado',
+            example: [1, 2, 3, 4, 5] 
+          },
+        },
+      },
+      Dispositivo: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid', example: '999e4567-e89b-12d3-a456-426614174999' },
+          nome: { type: 'string', example: 'Catraca Principal' },
+          tipo: { type: 'string', enum: ['CATRACA', 'LEITOR_CARTAO'], example: 'CATRACA' },
+          status: { type: 'string', enum: ['ATIVO', 'INATIVO', 'MANUTENCAO'], example: 'ATIVO' },
+          enderecoMac: { type: 'string', example: 'AA:BB:CC:DD:EE:01' },
+          ipLocal: { type: 'string', format: 'ipv4', example: '192.168.1.100' },
+          salaId: { type: 'string', format: 'uuid', example: '876e4567-e89b-12d3-a456-426614174111' },
         },
       },
       MetaPaginacao: {
@@ -50,39 +99,32 @@ export const openapiSpecification = {
     },
   },
   tags: [
-    { name: 'Sistema', description: 'Rotas de infraestrutura e saúde da API' },
-    { name: 'Autenticação', description: 'Gerenciamento de identidades e sessões' },
-    { name: 'Usuários', description: 'Gestão de contas, perfis e vinculação de cartões RFID' },
+    { name: 'Sistema', description: 'Infraestrutura e integridade da API' },
+    { name: 'Autenticação', description: 'Sessões, tokens JWT e ativação de contas' },
+    { name: 'Usuários', description: 'Gerenciamento de usuários e cartões RFID' },
+    { name: 'Salas', description: 'Gerenciamento de espaços físicos da instituição' },
+    { name: 'Turnos', description: 'Regras de horários permitidos para acesso' },
+    { name: 'Dispositivos IoT', description: 'Provisionamento e monitoramento de hardware' },
+    { name: 'Validação Física (Hardware)', description: 'Endpoints de altíssima performance para as placas ESP32' },
+    { name: 'Relatórios e Métricas', description: 'Agregações de dados em tempo real e exportação CSV' },
   ],
   paths: {
     '/health': {
       get: {
         summary: 'Health Check',
-        description: 'Verifica se a API está online e respondendo.',
         tags: ['Sistema'],
         responses: {
           '200': {
-            description: 'Servidor online',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'ok' },
-                    service: { type: 'string', example: 'syngate-backend' },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
+            description: 'API ativa',
+            content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string', example: 'ok' } } } } }
+          }
+        }
+      }
     },
-    // --- AUTENTICAÇÃO ---
+    // --- AUTHENTICATION ---
     '/api/v1/auth/cadastro': {
       post: {
-        summary: 'Cadastro de Usuário',
-        description: 'Cria um novo usuário e retorna os tokens de acesso.',
+        summary: 'Cadastro Inicial de Usuário',
         tags: ['Autenticação'],
         requestBody: {
           required: true,
@@ -92,48 +134,24 @@ export const openapiSpecification = {
                 type: 'object',
                 required: ['nome', 'email', 'senha'],
                 properties: {
-                  nome: { type: 'string', example: 'João Silva' },
-                  email: { type: 'string', example: 'joao@syngate.com' },
+                  nome: { type: 'string', example: 'Manoel Olímpio' },
+                  email: { type: 'string', example: 'manoel@syngate.com' },
                   senha: { type: 'string', example: 'Senha@123' },
-                  papel: { 
-                    type: 'string', 
-                    enum: ['ALUNO', 'PROFESSOR', 'FUNCIONARIO', 'COORDENADOR', 'GESTOR', 'VISITANTE'],
-                    example: 'ALUNO'
-                  },
-                },
-              },
-            },
-          },
+                  papel: { type: 'string', enum: ['ALUNO', 'PROFESSOR'], default: 'ALUNO' }
+                }
+              }
+            }
+          }
         },
         responses: {
-          '201': {
-            description: 'Usuário criado com sucesso.',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: {
-                      type: 'object',
-                      properties: {
-                        accessToken: { type: 'string' },
-                        refreshToken: { type: 'string' },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          '400': { description: 'Erro de validação ou e-mail já em uso.' },
-        },
-      },
+          '201': { description: 'Cadastro feito com sucesso. Aguardando verificação.' },
+          '400': { description: 'Dados inválidos ou e-mail já cadastrado.' }
+        }
+      }
     },
     '/api/v1/auth/login': {
       post: {
-        summary: 'Login',
-        description: 'Autentica o usuário e retorna o access token (15m) e refresh token (7d).',
+        summary: 'Autenticação de Usuário (Painel Web)',
         tags: ['Autenticação'],
         requestBody: {
           required: true,
@@ -144,327 +162,204 @@ export const openapiSpecification = {
                 required: ['email', 'senha'],
                 properties: {
                   email: { type: 'string', example: 'admin@syngate.com' },
-                  senha: { type: 'string', example: 'Senha@123' },
-                },
-              },
-            },
-          },
+                  senha: { type: 'string', example: 'Senha@123' }
+                }
+              }
+            }
+          }
         },
         responses: {
           '200': {
-            description: 'Login realizado com sucesso.',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: {
-                      type: 'object',
-                      properties: {
-                        accessToken: { type: 'string' },
-                        refreshToken: { type: 'string' },
-                      },
-                    },
-                  },
-                },
-              },
-            },
+            description: 'Autenticado.',
+            content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string', example: 'success' }, data: { type: 'object', properties: { accessToken: { type: 'string' }, refreshToken: { type: 'string' } } } } } } }
           },
           '401': { description: 'Credenciais inválidas.' },
-        },
-      },
+          '403': { description: 'E-mail ainda não verificado.' }
+        }
+      }
     },
-    '/api/v1/auth/refresh': {
-      post: {
-        summary: 'Renovar Access Token',
-        description: 'Gera um novo par de tokens utilizando um refresh token válido.',
-        tags: ['Autenticação'],
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: {
-                type: 'object',
-                required: ['refreshToken'],
-                properties: {
-                  refreshToken: { type: 'string' },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          '200': {
-            description: 'Tokens renovados com sucesso.',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: {
-                      type: 'object',
-                      properties: {
-                        accessToken: { type: 'string' },
-                        refreshToken: { type: 'string' },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          '401': { description: 'Sessão expirada. Faça login novamente.' },
-        },
-      },
-    },
-    '/api/v1/auth/logout': {
-      post: {
-        summary: 'Logout',
-        description: 'Invalida o token atual adicionando-o à blacklist do Redis.',
-        tags: ['Autenticação'],
-        security: [{ bearerAuth: [] }],
-        responses: {
-          '204': { description: 'Logout realizado com sucesso (No Content).' },
-          '401': { description: 'Token não fornecido ou já revogado.' },
-        },
-      },
-    },
-
     // --- USUÁRIOS ---
     '/api/v1/users/me': {
       get: {
-        summary: 'Meu Perfil',
-        description: 'Retorna os dados do próprio usuário autenticado. O ID é inferido de forma segura via Token JWT.',
+        summary: 'Obter Perfil Autenticado',
         tags: ['Usuários'],
         security: [{ bearerAuth: [] }],
         responses: {
-          '200': { 
-            description: 'Perfil retornado com sucesso.',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: { $ref: '#/components/schemas/Usuario' },
-                  }
-                }
-              }
-            }
-          },
-          '401': { description: 'Não autorizado.' },
-          '404': { description: 'Usuário não encontrado.' },
-        },
-      },
+          '200': { description: 'Sucesso.', content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string', example: 'success' }, data: { $ref: '#/components/schemas/Usuario' } } } } } }
+        }
+      }
     },
-    '/api/v1/users': {
+    // --- SALAS ---
+    '/api/v1/rooms': {
       get: {
-        summary: 'Listar Usuários',
-        description: 'Retorna uma lista paginada de usuários. Apenas para Gestores e Coordenadores.',
-        tags: ['Usuários'],
+        summary: 'Listar Salas Paginadas',
+        tags: ['Salas'],
         security: [{ bearerAuth: [] }],
         parameters: [
-          { name: 'page', in: 'query', description: 'Número da página', required: false, schema: { type: 'integer', default: 1 } },
-          { name: 'limit', in: 'query', description: 'Itens por página (máx 100)', required: false, schema: { type: 'integer', default: 10 } },
-          { name: 'search', in: 'query', description: 'Termo para busca em nome, e-mail ou matrícula', required: false, schema: { type: 'string' } },
+          { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 10 } },
+          { name: 'search', in: 'query', schema: { type: 'string' } }
         ],
         responses: {
-          '200': { 
-            description: 'Lista de usuários retornada com sucesso.',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: { 
-                      type: 'array',
-                      items: { $ref: '#/components/schemas/Usuario' }
-                    },
-                    meta: { $ref: '#/components/schemas/MetaPaginacao' }
-                  }
-                }
-              }
-            }
-          },
-          '403': { description: 'Acesso negado. Privilégios insuficientes.' },
-        },
+          '200': { description: 'Sucesso.', content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string' }, data: { type: 'array', items: { $ref: '#/components/schemas/Sala' } }, meta: { $ref: '#/components/schemas/MetaPaginacao' } } } } } }
+        }
       },
       post: {
-        summary: 'Criar Usuário',
-        description: 'Cria um usuário manualmente. Apenas para Gestores e Coordenadores.',
-        tags: ['Usuários'],
+        summary: 'Criar Nova Sala',
+        tags: ['Salas'],
         security: [{ bearerAuth: [] }],
+        description: 'Restrito para papéis: GESTOR, COORDENADOR.',
         requestBody: {
           required: true,
-          content: {
-            'application/json': {
-              schema: {
-                type: 'object',
-                required: ['nome', 'email', 'senha'],
-                properties: {
-                  nome: { type: 'string', example: 'Carlos Professor' },
-                  email: { type: 'string', example: 'carlos@syngate.com' },
-                  senha: { type: 'string', example: 'SenhaForte123' },
-                  matricula: { type: 'string', example: 'PRF-002' },
-                  curso: { type: 'string', example: 'Sistemas de Informação' },
-                  papel: { type: 'string', example: 'PROFESSOR' },
-                  turnoId: { type: 'string', example: 'uuid-do-turno' },
-                },
-              },
-            },
-          },
+          content: { 'application/json': { schema: { type: 'object', required: ['nome'], properties: { nome: { type: 'string', example: 'Laboratório 102' }, bloco: { type: 'string', example: 'B' } } } } }
         },
         responses: {
-          '201': { 
-            description: 'Usuário criado com sucesso.',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: { $ref: '#/components/schemas/Usuario' },
-                  }
-                }
-              }
-            }
-          },
-          '400': { description: 'Erro de validação nos dados fornecidos.' },
-          '403': { description: 'Acesso negado.' },
-          '409': { description: 'Conflito: E-mail ou Matrícula já em uso.' },
-        },
-      },
+          '201': { description: 'Criado.' },
+          '409': { description: 'Conflito: Sala com mesmo nome já existe neste bloco.' }
+        }
+      }
     },
-    '/api/v1/users/{id}': {
+    // --- TURNOS ---
+    '/api/v1/shifts': {
       get: {
-        summary: 'Buscar Usuário',
-        description: 'Busca um usuário específico pelo ID. Apenas para Gestores e Coordenadores.',
-        tags: ['Usuários'],
+        summary: 'Listar Turnos Cadastrados',
+        tags: ['Turnos'],
         security: [{ bearerAuth: [] }],
-        parameters: [
-          { name: 'id', in: 'path', description: 'UUID do usuário', required: true, schema: { type: 'string' } },
-        ],
         responses: {
-          '200': { 
-            description: 'Usuário retornado com sucesso.',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: { $ref: '#/components/schemas/Usuario' },
-                  }
-                }
-              }
-            }
-          },
-          '404': { description: 'Usuário não encontrado.' },
-        },
+          '200': { description: 'Sucesso.', content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string' }, data: { type: 'array', items: { $ref: '#/components/schemas/Turno' } } } } } } }
+        }
       },
-      put: {
-        summary: 'Atualizar Usuário',
-        description: 'Atualiza os dados de um usuário. Apenas para Gestores e Coordenadores.',
-        tags: ['Usuários'],
+      post: {
+        summary: 'Criar Novo Turno de Acesso',
+        tags: ['Turnos'],
         security: [{ bearerAuth: [] }],
-        parameters: [
-          { name: 'id', in: 'path', description: 'UUID do usuário', required: true, schema: { type: 'string' } },
-        ],
+        description: 'Restrito para papéis: GESTOR, COORDENADOR.',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/Turno' } } }
+        },
+        responses: {
+          '201': { description: 'Criado com sucesso.' }
+        }
+      }
+    },
+    // --- DISPOSITIVOS IOT ---
+    '/api/v1/devices': {
+      get: {
+        summary: 'Listar Dispositivos IoT',
+        tags: ['Dispositivos IoT'],
+        security: [{ bearerAuth: [] }],
+        description: 'Apenas GESTOR e COORDENADOR podem gerenciar o parque de hardware.',
+        responses: {
+          '200': { description: 'Sucesso.', content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string' }, data: { type: 'array', items: { $ref: '#/components/schemas/Dispositivo' } } } } } } }
+        }
+      },
+      post: {
+        summary: 'Provisionar Novo Dispositivo IoT',
+        tags: ['Dispositivos IoT'],
+        security: [{ bearerAuth: [] }],
+        description: 'Gera uma chave secreta randômica que será exibida APENAS UMA VEZ na resposta para gravação no firmware da placa.',
         requestBody: {
           required: true,
           content: {
             'application/json': {
               schema: {
                 type: 'object',
+                required: ['nome', 'enderecoMac', 'salaId'],
                 properties: {
-                  nome: { type: 'string' },
-                  email: { type: 'string' },
-                  matricula: { type: 'string' },
-                  curso: { type: 'string' },
-                  papel: { type: 'string' },
-                  turnoId: { type: 'string' },
-                  ativo: { type: 'boolean', description: 'Inativar (soft delete) ou reativar usuário' },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          '200': { 
-            description: 'Usuário atualizado com sucesso.',
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: { $ref: '#/components/schemas/Usuario' },
-                  }
+                  nome: { type: 'string', example: 'Leitor Lab 101' },
+                  tipo: { type: 'string', enum: ['CATRACA', 'LEITOR_CARTAO'], default: 'LEITOR_CARTAO' },
+                  enderecoMac: { type: 'string', example: 'AA:BB:CC:DD:EE:02' },
+                  salaId: { type: 'string', format: 'uuid' },
+                  ipLocal: { type: 'string', example: '192.168.1.101' }
                 }
               }
             }
-          },
-          '400': { description: 'Erro de validação.' },
+          }
         },
-      },
-      delete: {
-        summary: 'Deletar Usuário (Soft Delete)',
-        description: 'Realiza a exclusão lógica do usuário (inativação) preservando o histórico de logs.',
-        tags: ['Usuários'],
-        security: [{ bearerAuth: [] }],
-        parameters: [
-          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
-        ],
         responses: {
-          '204': { description: 'Usuário inativado com sucesso (No Content).' },
-          '403': { description: 'Acesso negado.' },
-        },
-      },
+          '201': {
+            description: 'Provisionado.',
+            content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string' }, data: { type: 'object', properties: { id: { type: 'string' }, nome: { type: 'string' }, rawKey: { type: 'string', description: 'CHAVE CRUA PARA O FIRMWARE. GUARDE ISSO!', example: 'b8f9c2d1e4a7...' } } } } } } }
+          }
+        }
+      }
     },
-    '/api/v1/users/{id}/cartao': {
-      patch: {
-        summary: 'Vincular/Desvincular Cartão RFID',
-        description: 'Associa um UID de RFID a um usuário. Para desvincular, envie cartaoId como null.',
-        tags: ['Usuários'],
-        security: [{ bearerAuth: [] }],
-        parameters: [
-          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
-        ],
+    // --- HARDWARE ACCESS (ENDPOINT MAIS CRÍTICO) ---
+    '/api/v1/access': {
+      post: {
+        summary: 'Validação de Acesso Físico (Chamado pela ESP32)',
+        tags: ['Validação Física (Hardware)'],
+        security: [{ deviceMac: [], deviceKey: [] }],
+        description: 'Endpoint exclusivo para as placas das catracas. Não aceita token JWT, exige autenticação criptográfica via Headers customizados.',
         requestBody: {
           required: true,
           content: {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['cartaoId'],
+                required: ['uidCartao'],
                 properties: {
-                  cartaoId: { type: 'string', nullable: true, example: 'A1:B2:C3:D4' },
-                },
-              },
-            },
-          },
+                  uidCartao: { type: 'string', description: 'ID bruto em hexadecimal lido pelo leitor RFID/NFC', example: 'A1:B2:C3:D4' },
+                  direcao: { type: 'string', enum: ['ENTRADA', 'SAIDA'], default: 'ENTRADA' },
+                  finalidade: { type: 'string', enum: ['ENTRADA_PREDIO', 'PRESENCA_SALA'], default: 'ENTRADA_PREDIO' }
+                }
+              }
+            }
+          }
         },
         responses: {
-          '200': { 
-            description: 'Cartão vinculado com sucesso.',
+          '200': {
+            description: 'Resposta rápida estruturada para o código C++ do microcontrolador.',
             content: {
               'application/json': {
                 schema: {
                   type: 'object',
                   properties: {
-                    status: { type: 'string', example: 'success' },
-                    data: { $ref: '#/components/schemas/Usuario' },
+                    granted: { type: 'boolean', description: 'True libera o relé físico da catraca; False acende LED vermelho.', example: true },
+                    reason: { type: 'string', nullable: true, description: 'Motivo específico em caso de negação.', example: 'Fora do horário permitido' }
                   }
                 }
               }
             }
           },
-          '409': { description: 'Conflito: Cartão já vinculado a outro usuário.' },
-        },
-      },
+          '403': { description: 'Hardware não autenticado (MAC ou chave inválidos).' }
+        }
+      }
     },
-  },
+    // --- REPORTS ---
+    '/api/v1/reports/dashboard': {
+      get: {
+        summary: 'Obter Dados Consolidados do Dashboard',
+        tags: ['Relatórios e Métricas'],
+        security: [{ bearerAuth: [] }],
+        description: 'Retorna a agregação completa de acessos junto com os logs detalhados. Resultados salvos em Cache Redis por 5 minutos.',
+        parameters: [
+          { name: 'dataInicio', in: 'query', schema: { type: 'string', format: 'date' } },
+          { name: 'dataFim', in: 'query', schema: { type: 'string', format: 'date' } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['CONCEDIDO', 'NEGADO'] } }
+        ],
+        responses: {
+          '200': { description: 'Dados de relatórios consolidados recuperados.' }
+        }
+      }
+    },
+    '/api/v1/reports/export/csv': {
+      get: {
+        summary: 'Exportar Histórico Completo em CSV',
+        tags: ['Relatórios e Métricas'],
+        security: [{ bearerAuth: [] }],
+        description: 'Força o download direto de um arquivo CSV plano estruturado com separadores de ponto e vírgula, compatível com Excel.',
+        responses: {
+          '200': {
+            description: 'Arquivo CSV gerado com sucesso.',
+            headers: {
+              'Content-Type': { schema: { type: 'string', example: 'text/csv' } },
+              'Content-Disposition': { schema: { type: 'string', example: 'attachment; filename="relatorio.csv"' } }
+            }
+          }
+        }
+      }
+    }
+  }
 };
