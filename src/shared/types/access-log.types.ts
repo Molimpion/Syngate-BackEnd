@@ -4,5 +4,5 @@ export type LogAcessoDTO = Omit<LogAcesso, 'id'>;
 
 export interface AccessResult {
   granted: boolean;
-  reason: string;
+  reason: string | null;
 }
