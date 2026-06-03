@@ -2,10 +2,10 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { RedisStore } from 'rate-limit-redis';
 import { redis } from '../../lib/redis';
-import { validate } from '../../middlewares/validate.middlewares';
+import { validate } from '../../shared/middlewares/validate.middlewares';
 import { loginSchema, cadastroSchema, refreshTokenSchema } from '../../schemas/auth.schema';
 import { AuthController } from './auth.controller';
-import { authMiddleware } from '../../middlewares/auth.middleware';
+import { authMiddleware } from '../../shared/middlewares/auth.middleware';
 
 const router = Router();
 const authController = new AuthController();

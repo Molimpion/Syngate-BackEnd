@@ -14,6 +14,7 @@ import { roomsRouter } from './modules/rooms/rooms.routes';
 import { shiftsRouter } from './modules/shifts/shifts.routes';
 import { devicesRouter } from './modules/devices/devices.routes';
 import { accessRouter } from './modules/access/access.routes';
+import { reportsRouter } from './modules/reports/reports.routes';
 
 const app = express();
 
@@ -71,6 +72,7 @@ app.use('/api/v1/rooms', roomsRouter);
 app.use('/api/v1/shifts', shiftsRouter);
 app.use('/api/v1/devices', devicesRouter);
 app.use('/api/v1/access', accessRouter);
+app.use('/api/v1/reports', reportsRouter);
 
 // --- Middleware de Tratamento Global de Erros ---
 app.use(errorHandler);

@@ -15,7 +15,7 @@ export class AccessService {
   async processAccess(data: ProcessAccessDTO): Promise<AccessResult> {
     let granted = false;
     let reason: string | null = null;
-    let status = StatusAcesso.NEGADO;
+    let status: StatusAcesso = StatusAcesso.NEGADO;
     let usuarioId: string | null = null;
 
     // 1. Busca o usuário atrelado ao cartão (e traz as regras do turno dele)
