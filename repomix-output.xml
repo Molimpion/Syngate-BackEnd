@@ -6312,89 +6312,6 @@ router.get('/export/csv', reportsController.downloadCSV);
 export { router as reportsRouter };
 </file>
 
-<file path="src/modules/reports/reports.service.ts">
-import { prisma } from '../../lib/prisma';
-import { redis } from '../../lib/redis';
-import { stringify } from 'csv-stringify/sync';
-import { ReportFilters } from '../../shared/types/report.types';
-
-export class ReportsService {
-  async getAccessReport(filters: ReportFilters) {
-    // 1. Gera uma chave única para o cache baseada nos filtros
-    const cacheKey = `relatorio:acessos:${JSON.stringify(filters)}`;
-
-    // 2. Tenta buscar do Redis primeiro
-    const cachedData = await redis.get(cacheKey);
-    if (cachedData) {
-      return JSON.parse(cachedData);
-    }
-
-    // 3. Constrói a query de filtro dinamicamente
-    const whereClause: any = {};
-    
-    if (filters.dataInicio || filters.dataFim) {
-      whereClause.dataHora = {};
-      if (filters.dataInicio) whereClause.dataHora.gte = new Date(filters.dataInicio);
-      if (filters.dataFim) whereClause.dataHora.lte = new Date(filters.dataFim);
-    }
-    if (filters.usuarioId) whereClause.usuarioId = filters.usuarioId;
-    if (filters.dispositivoId) whereClause.dispositivoId = filters.dispositivoId;
-    if (filters.status) whereClause.status = filters.status;
-
-    // 4. Executa a busca crua e as agregações em paralelo
-    const [logs, totalPorStatus, totalPorDirecao] = await Promise.all([
-      prisma.logAcesso.findMany({
-        where: whereClause,
-        include: {
-          usuario: { select: { nome: true, matricula: true, papel: true } },
-          dispositivo: { select: { nome: true, sala: { select: { nome: true, bloco: true } } } },
-        },
-        orderBy: { dataHora: 'desc' },
-      }),
-      prisma.logAcesso.groupBy({ by: ['status'], _count: true, where: whereClause }),
-      prisma.logAcesso.groupBy({ by: ['direcao'], _count: true, where: whereClause })
-    ]);
-
-    // 5. Monta o objeto final de resposta
-    const reportData = {
-      resumo: {
-        totalAcessos: logs.length,
-        porStatus: totalPorStatus,
-        porDirecao: totalPorDirecao,
-      },
-      detalhes: logs,
-    };
-
-    // 6. Salva no Redis com TTL de 5 minutos (300 segundos)
-    await redis.set(cacheKey, JSON.stringify(reportData), 'EX', 300);
-
-    return reportData;
-  }
-
-  async generateCSV(filters: ReportFilters): Promise<string> {
-    const report = await this.getAccessReport(filters);
-
-    // Mapeia os dados para um formato plano adequado para planilhas
-    const flatData = report.detalhes.map((log: any) => ({
-      'Data e Hora': new Date(log.dataHora).toLocaleString('pt-BR'),
-      'Status': log.status,
-      'Direção': log.direcao,
-      'Finalidade': log.finalidade,
-      'Usuário': log.usuario?.nome || 'Não Registrado',
-      'Matrícula': log.usuario?.matricula || '-',
-      'Papel': log.usuario?.papel || '-',
-      'Dispositivo': log.dispositivo?.nome || '-',
-      'Sala': log.dispositivo?.sala?.nome || '-',
-      'UID Cartão': log.uidCartao,
-      'Motivo Negação': log.motivo || '-',
-    }));
-
-    // Gera a string CSV com cabeçalhos automáticos
-    return stringify(flatData, { header: true, delimiter: ';' });
-  }
-}
-</file>
-
 <file path="src/modules/rooms/rooms.controller.ts">
 import { Request, Response } from 'express';
 import { RoomsService } from './rooms.service';
@@ -9778,6 +9695,92 @@ export class AuthController {
 }
 </file>
 
+<file path="src/modules/reports/reports.service.ts">
+import { prisma } from '../../lib/prisma';
+import { redis } from '../../lib/redis';
+import { stringify } from 'csv-stringify/sync';
+import { Prisma, StatusAcesso } from '@prisma/client';
+import { ReportFilters } from '../../shared/types/report.types';
+
+export class ReportsService {
+  async getAccessReport(filters: ReportFilters) {
+    // 1. Gera uma chave única para o cache baseada nos filtros
+    const cacheKey = `relatorio:acessos:${JSON.stringify(filters)}`;
+
+    // 2. Tenta buscar do Redis primeiro
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      return JSON.parse(cachedData);
+    }
+
+    // 3. Constrói a query de filtro dinamicamente com tipo correto
+    const whereClause: Prisma.LogAcessoWhereInput = {};
+
+    if (filters.dataInicio || filters.dataFim) {
+      whereClause.dataHora = {};
+      if (filters.dataInicio) whereClause.dataHora.gte = new Date(filters.dataInicio);
+      if (filters.dataFim) whereClause.dataHora.lte = new Date(filters.dataFim);
+    }
+    if (filters.usuarioId) whereClause.usuarioId = filters.usuarioId;
+    if (filters.dispositivoId) whereClause.dispositivoId = filters.dispositivoId;
+    if (filters.status) whereClause.status = filters.status as StatusAcesso;
+    // 4. Executa a busca e as agregações em paralelo
+    const [logs, totalPorStatus, totalPorDirecao] = await Promise.all([
+      prisma.logAcesso.findMany({
+        where: whereClause,
+        include: {
+          usuario: { select: { nome: true, matricula: true, papel: true } },
+          dispositivo: { select: { nome: true, sala: { select: { nome: true, bloco: true } } } },
+        },
+        orderBy: { dataHora: 'desc' },
+      }),
+      prisma.logAcesso.groupBy({ by: ['status'], _count: true, where: whereClause }),
+      prisma.logAcesso.groupBy({ by: ['direcao'], _count: true, where: whereClause }),
+    ]);
+
+    // 5. Monta o objeto final de resposta
+    const reportData = {
+      resumo: {
+        totalAcessos: logs.length,
+        porStatus: totalPorStatus,
+        porDirecao: totalPorDirecao,
+      },
+      detalhes: logs,
+    };
+
+    // 6. Salva no Redis com TTL de 5 minutos
+    await redis.set(cacheKey, JSON.stringify(reportData), 'EX', 300);
+
+    return reportData;
+  }
+
+  async generateCSV(filters: ReportFilters): Promise<string> {
+    const report = await this.getAccessReport(filters);
+
+    const flatData = report.detalhes.map((log: Prisma.LogAcessoGetPayload<{
+      include: {
+        usuario: { select: { nome: true; matricula: true; papel: true } };
+        dispositivo: { select: { nome: true; sala: { select: { nome: true; bloco: true } } } };
+      };
+    }>) => ({
+      'Data e Hora': new Date(log.dataHora).toLocaleString('pt-BR'),
+      'Status': log.status,
+      'Direção': log.direcao,
+      'Finalidade': log.finalidade,
+      'Usuário': log.usuario?.nome || 'Não Registrado',
+      'Matrícula': log.usuario?.matricula || '-',
+      'Papel': log.usuario?.papel || '-',
+      'Dispositivo': log.dispositivo?.nome || '-',
+      'Sala': log.dispositivo?.sala?.nome || '-',
+      'UID Cartão': log.uidCartao,
+      'Motivo Negação': log.motivo || '-',
+    }));
+
+    return stringify(flatData, { header: true, delimiter: ';' });
+  }
+}
+</file>
+
 <file path="src/modules/shifts/shifts.controller.ts">
 import { Request, Response } from 'express';
 import { ShiftsService } from './shifts.service';
@@ -10814,154 +10817,6 @@ export const openapiSpecification = {
 };
 </file>
 
-<file path="src/modules/auth/auth.service.ts">
-import jwt from 'jsonwebtoken';
-import { randomBytes, createHash } from 'crypto';
-import { prisma } from '../../lib/prisma';
-import { redis } from '../../lib/redis';
-import { comparePassword, hashPassword } from '../../shared/utils/hash';
-import { LoginPayload, CadastroPayload, TokenResponse } from '../../shared/types/auth.types';
-import { PapelUsuario, TipoToken } from '@prisma/client';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
-const ACCESS_TOKEN_EXPIRES_IN = '15m';
-const REFRESH_TOKEN_EXPIRES_DAYS = 7;
-
-export class AuthService {
-  async login(payload: LoginPayload): Promise<TokenResponse> {
-    const usuario = await prisma.usuario.findUnique({
-      where: { email: payload.email },
-    });
-
-    if (!usuario || !usuario.ativo) {
-      throw new Error('Credenciais inválidas.');
-    }
-
-    if (!usuario.emailVerificado) {
-      throw new Error('E-mail não verificado.');
-    }
-
-    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
-    if (!senhaValida) {
-      throw new Error('Credenciais inválidas.');
-    }
-
-    return this.generateTokens(usuario.id, usuario.papel);
-  }
-
-  async logout(accessToken: string): Promise<void> {
-    try {
-      const decoded = jwt.verify(accessToken, JWT_SECRET) as jwt.JwtPayload;
-      if (decoded.exp) {
-        const tempoRestante = decoded.exp - Math.floor(Date.now() / 1000);
-        if (tempoRestante > 0) {
-          await redis.set(`blacklist:${accessToken}`, 'true', 'EX', tempoRestante);
-        }
-      }
-    } catch {
-    }
-  }
-
-  async cadastro(dados: CadastroPayload): Promise<{ message: string }> {
-    const usuarioExistente = await prisma.usuario.findUnique({
-      where: { email: dados.email },
-    });
-
-    if (usuarioExistente) {
-      throw new Error('E-mail já está em uso.');
-    }
-
-    const senhaHasheada = await hashPassword(dados.senha);
-
-    const tokenVerificacao = randomBytes(32).toString('hex');
-
-    await prisma.usuario.create({
-      data: {
-        nome: dados.nome,
-        email: dados.email,
-        hashSenha: senhaHasheada,
-        papel: dados.papel ?? PapelUsuario.ALUNO,
-        emailVerificado: false,
-        tokenVerificacao,
-      },
-    });
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[DEV] Token de verificação para ${dados.email}: ${tokenVerificacao}`);
-    }
-
-    return { message: 'Cadastro realizado. Verifique seu e-mail para ativar a conta.' };
-  }
-
-  async verificarEmail(token: string): Promise<{ message: string }> {
-    const usuario = await prisma.usuario.findUnique({
-      where: { tokenVerificacao: token },
-    });
-
-    if (!usuario) {
-      throw new Error('Token de verificação inválido ou já utilizado.');
-    }
-
-    await prisma.usuario.update({
-      where: { id: usuario.id },
-      data: {
-        emailVerificado: true,
-        tokenVerificacao: null,
-      },
-    });
-
-    return { message: 'E-mail verificado com sucesso. Você já pode fazer login.' };
-  }
-
-  async refreshToken(tokenString: string): Promise<TokenResponse> {
-    const hash = createHash('sha256').update(tokenString).digest('hex');
-
-    const tokenSalvo = await prisma.token.findUnique({
-      where: { hash },
-      include: { usuario: true },
-    });
-
-    if (
-      !tokenSalvo ||
-      tokenSalvo.revogado ||
-      (tokenSalvo.dataExpiracao && tokenSalvo.dataExpiracao < new Date())
-    ) {
-      throw new Error('Refresh token inválido ou expirado.');
-    }
-
-    if (!tokenSalvo.usuario.ativo) {
-      throw new Error('Usuário inativo.');
-    }
-
-    await prisma.token.delete({ where: { id: tokenSalvo.id } });
-
-    return this.generateTokens(tokenSalvo.usuarioId, tokenSalvo.usuario.papel);
-  }
-
-  private async generateTokens(usuarioId: string, papel: PapelUsuario): Promise<TokenResponse> {
-    const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET, {
-      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
-    });
-
-    const refreshTokenString = randomBytes(40).toString('hex');
-    const refreshTokenHash = createHash('sha256').update(refreshTokenString).digest('hex');
-    const expiracao = new Date();
-    expiracao.setDate(expiracao.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
-
-    await prisma.token.create({
-      data: {
-        tipo: TipoToken.REFRESH,
-        hash: refreshTokenHash,
-        usuarioId,
-        dataExpiracao: expiracao,
-      },
-    });
-
-    return { accessToken, refreshToken: refreshTokenString };
-  }
-}
-</file>
-
 <file path="src/modules/users/users.service.ts">
 import { prisma } from '../../lib/prisma';
 import { hashPassword } from '../../shared/utils/hash';
@@ -11317,6 +11172,160 @@ model LogAcesso {
   @@index([usuarioId, status])
 
   @@map("logs_acesso")
+}
+</file>
+
+<file path="src/modules/auth/auth.service.ts">
+import jwt from 'jsonwebtoken';
+import { randomBytes, createHash } from 'crypto';
+import { prisma } from '../../lib/prisma';
+import { redis } from '../../lib/redis';
+import { comparePassword, hashPassword } from '../../shared/utils/hash';
+import { LoginPayload, CadastroPayload, TokenResponse } from '../../shared/types/auth.types';
+import { PapelUsuario, TipoToken } from '@prisma/client';
+
+// Sem fallback — a aplicação não sobe sem JWT_SECRET definido
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('FATAL: JWT_SECRET não definido. Configure a variável de ambiente antes de iniciar.');
+}
+
+const ACCESS_TOKEN_EXPIRES_IN = '15m';
+const REFRESH_TOKEN_EXPIRES_DAYS = 7;
+
+export class AuthService {
+  async login(payload: LoginPayload): Promise<TokenResponse> {
+    const usuario = await prisma.usuario.findUnique({
+      where: { email: payload.email },
+    });
+
+    if (!usuario || !usuario.ativo) {
+      throw new Error('Credenciais inválidas.');
+    }
+
+    if (!usuario.emailVerificado) {
+      throw new Error('E-mail não verificado.');
+    }
+
+    const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
+    if (!senhaValida) {
+      throw new Error('Credenciais inválidas.');
+    }
+
+    return this.generateTokens(usuario.id, usuario.papel);
+  }
+
+  async logout(accessToken: string): Promise<void> {
+    try {
+      const decoded = jwt.verify(accessToken, JWT_SECRET!) as jwt.JwtPayload;
+      if (decoded.exp) {
+        const tempoRestante = decoded.exp - Math.floor(Date.now() / 1000);
+        if (tempoRestante > 0) {
+          await redis.set(`blacklist:${accessToken}`, 'true', 'EX', tempoRestante);
+        }
+      }
+    } catch {
+      // Token já inválido/expirado — sem ação necessária
+    }
+  }
+
+  async cadastro(dados: CadastroPayload): Promise<{ message: string }> {
+    const usuarioExistente = await prisma.usuario.findUnique({
+      where: { email: dados.email },
+    });
+
+    if (usuarioExistente) {
+      throw new Error('E-mail já está em uso.');
+    }
+
+    const senhaHasheada = await hashPassword(dados.senha);
+    const tokenVerificacao = randomBytes(32).toString('hex');
+
+    await prisma.usuario.create({
+      data: {
+        nome: dados.nome,
+        email: dados.email,
+        hashSenha: senhaHasheada,
+        papel: dados.papel ?? PapelUsuario.ALUNO,
+        emailVerificado: false,
+        tokenVerificacao,
+      },
+    });
+
+    // TODO: disparar e-mail com link contendo o tokenVerificacao
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DEV] Token de verificação para ${dados.email}: ${tokenVerificacao}`);
+    }
+
+    return { message: 'Cadastro realizado. Verifique seu e-mail para ativar a conta.' };
+  }
+
+  async verificarEmail(token: string): Promise<{ message: string }> {
+    const usuario = await prisma.usuario.findUnique({
+      where: { tokenVerificacao: token },
+    });
+
+    if (!usuario) {
+      throw new Error('Token de verificação inválido ou já utilizado.');
+    }
+
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        emailVerificado: true,
+        tokenVerificacao: null,
+      },
+    });
+
+    return { message: 'E-mail verificado com sucesso. Você já pode fazer login.' };
+  }
+
+  async refreshToken(tokenString: string): Promise<TokenResponse> {
+    const hash = createHash('sha256').update(tokenString).digest('hex');
+
+    const tokenSalvo = await prisma.token.findUnique({
+      where: { hash },
+      include: { usuario: true },
+    });
+
+    if (
+      !tokenSalvo ||
+      tokenSalvo.revogado ||
+      (tokenSalvo.dataExpiracao && tokenSalvo.dataExpiracao < new Date())
+    ) {
+      throw new Error('Refresh token inválido ou expirado.');
+    }
+
+    if (!tokenSalvo.usuario.ativo) {
+      throw new Error('Usuário inativo.');
+    }
+
+    await prisma.token.delete({ where: { id: tokenSalvo.id } });
+
+    return this.generateTokens(tokenSalvo.usuarioId, tokenSalvo.usuario.papel);
+  }
+
+  private async generateTokens(usuarioId: string, papel: PapelUsuario): Promise<TokenResponse> {
+    const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET!, {
+      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+    });
+
+    const refreshTokenString = randomBytes(40).toString('hex');
+    const refreshTokenHash = createHash('sha256').update(refreshTokenString).digest('hex');
+    const expiracao = new Date();
+    expiracao.setDate(expiracao.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+
+    await prisma.token.create({
+      data: {
+        tipo: TipoToken.REFRESH,
+        hash: refreshTokenHash,
+        usuarioId,
+        dataExpiracao: expiracao,
+      },
+    });
+
+    return { accessToken, refreshToken: refreshTokenString };
+  }
 }
 </file>
 
