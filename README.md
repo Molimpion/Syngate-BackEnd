@@ -24,7 +24,7 @@
 Este repositório contém o código-fonte do backend da aplicação **Syngate**.
 Trata-se de uma **API RESTful** robusta, segura e modular, projetada para gerenciar o controle de acesso, dispositivos (totens/catracas), salas, turnos operacionais e logs de auditoria.
 
-**API ao vivo:** [URL_DA_API_AQUI]
+**API ao vivo:** [[URL_DA_API_AQUI]](https://syngate-api.onrender.com)
 
 **Documentação (Scalar - Moderna):** [URL_DA_API_AQUI/scalar]
 
