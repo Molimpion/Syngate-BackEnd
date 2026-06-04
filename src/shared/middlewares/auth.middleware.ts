@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { redis } from '../lib/redis';
-import { prisma } from '../lib/prisma';
-import { JwtPayload } from '../shared/types/auth.types';
+import { redis } from '../../lib/redis';
+import { prisma } from '../../lib/prisma';
+import { JwtPayload } from '../types/auth.types';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_development';
 
