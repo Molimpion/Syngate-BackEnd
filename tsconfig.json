@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "es2022",
     "module": "Node16",
-    "rootDir": "./",
+    "rootDir": "./src",
     "outDir": "./dist",
     "moduleResolution": "Node16",
     "esModuleInterop": true,
