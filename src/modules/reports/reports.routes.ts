@@ -12,6 +12,7 @@ router.use(authMiddleware);
 const adminRoles = [PapelUsuario.GESTOR, PapelUsuario.COORDENADOR];
 router.use(roleMiddleware(adminRoles));
 
+router.get('/stats', reportsController.getStats);
 router.get('/dashboard', reportsController.getDashboardData);
 router.get('/export/csv', reportsController.downloadCSV);
 
