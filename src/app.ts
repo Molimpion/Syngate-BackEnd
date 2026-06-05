@@ -17,6 +17,7 @@ import { accessRouter } from './modules/access/access.routes';
 import { reportsRouter } from './modules/reports/reports.routes';
 
 const app = express();
+app.set('trust proxy', 1);
 
 const logger = pinoHttp({
   transport: {
