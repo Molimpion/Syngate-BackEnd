@@ -1,21 +1,40 @@
 import { prisma } from '../../lib/prisma';
 import { redis } from '../../lib/redis';
 import { stringify } from 'csv-stringify/sync';
-import { Prisma, StatusAcesso } from '@prisma/client';
+import { Prisma, StatusAcesso, StatusDispositivo } from '@prisma/client';
 import { ReportFilters } from '../../shared/types/report.types';
 
 export class ReportsService {
+  async getStats() {
+    const cacheKey = 'relatorio:stats';
+
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+
+    const [totalAcessos, concedidos, negados, dispositivosAtivos] = await Promise.all([
+      prisma.logAcesso.count({ where: { dataHora: { gte: hoje } } }),
+      prisma.logAcesso.count({ where: { dataHora: { gte: hoje }, status: StatusAcesso.CONCEDIDO } }),
+      prisma.logAcesso.count({ where: { dataHora: { gte: hoje }, status: StatusAcesso.NEGADO } }),
+      prisma.dispositivo.count({ where: { status: StatusDispositivo.ATIVO } }),
+    ]);
+
+    const stats = { totalAcessos, concedidos, negados, dispositivosAtivos };
+
+    // Cache de 60 segundos — alinhado com o intervalo de revalidação do frontend
+    await redis.set(cacheKey, JSON.stringify(stats), 'EX', 60);
+
+    return stats;
+  }
+
   async getAccessReport(filters: ReportFilters) {
-    // 1. Gera uma chave única para o cache baseada nos filtros
     const cacheKey = `relatorio:acessos:${JSON.stringify(filters)}`;
 
-    // 2. Tenta buscar do Redis primeiro
     const cachedData = await redis.get(cacheKey);
-    if (cachedData) {
-      return JSON.parse(cachedData);
-    }
+    if (cachedData) return JSON.parse(cachedData);
 
-    // 3. Constrói a query de filtro dinamicamente com tipo correto
     const whereClause: Prisma.LogAcessoWhereInput = {};
 
     if (filters.dataInicio || filters.dataFim) {
@@ -26,7 +45,7 @@ export class ReportsService {
     if (filters.usuarioId) whereClause.usuarioId = filters.usuarioId;
     if (filters.dispositivoId) whereClause.dispositivoId = filters.dispositivoId;
     if (filters.status) whereClause.status = filters.status as StatusAcesso;
-    // 4. Executa a busca e as agregações em paralelo
+
     const [logs, totalPorStatus, totalPorDirecao] = await Promise.all([
       prisma.logAcesso.findMany({
         where: whereClause,
@@ -40,7 +59,6 @@ export class ReportsService {
       prisma.logAcesso.groupBy({ by: ['direcao'], _count: true, where: whereClause }),
     ]);
 
-    // 5. Monta o objeto final de resposta
     const reportData = {
       resumo: {
         totalAcessos: logs.length,
@@ -50,7 +68,6 @@ export class ReportsService {
       detalhes: logs,
     };
 
-    // 6. Salva no Redis com TTL de 5 minutos
     await redis.set(cacheKey, JSON.stringify(reportData), 'EX', 300);
 
     return reportData;
