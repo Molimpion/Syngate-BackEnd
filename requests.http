@@ -1,0 +1,211 @@
+@baseUrl = https://syngate-api.onrender.com
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2M2ZkZDk4Mi1lMTMwLTQ1YTEtYWNlZC0yMTc0MzUzNDViYzYiLCJwYXBlbCI6IkdFU1RPUiIsImlhdCI6MTc4MDY4MzgxMSwiZXhwIjoxNzgwNjg0NzExfQ.S28rf7iZ4DCFpENLQ2HlPFBHGvJ_VBVnrYBVR5Colnk
+### Health Check
+GET {{baseUrl}}/health
+
+###
+
+### Login Admin
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@syngate.com",
+  "senha": "Senha@123"
+}
+
+###
+
+### Criar Sala
+POST {{baseUrl}}/api/v1/rooms
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Entrada Principal",
+  "bloco": "A"
+}
+
+###
+
+### Provisionar Dispositivo
+POST {{baseUrl}}/api/v1/devices
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Leitor Entrada Principal",
+  "tipo": "LEITOR_CARTAO",
+  "enderecoMac": "80:F3:DA:A9:A3:6C",
+  "salaId": "ae1b2eb1-1bd2-48a2-9572-51f08354b014"
+}
+
+###
+
+### Camila (PROFESSOR) - Chaveiro
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Camila",
+  "email": "camila@syngate.com",
+  "senha": "Senha@123",
+  "papel": "PROFESSOR"
+}
+
+###
+
+### Fernando (FUNCIONARIO) - Tag Redonda
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Fernando",
+  "email": "fernando@syngate.com",
+  "senha": "Senha@123",
+  "papel": "FUNCIONARIO"
+}
+
+###
+
+### Muriel (ALUNO) - Tag Quadrada
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Muriel",
+  "email": "muriel@syngate.com",
+  "senha": "Senha@123",
+  "papel": "ALUNO"
+}
+
+###
+
+### Lucas (VISITANTE) - Cartão
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Lucas Visitante",
+  "email": "lucas@syngate.com",
+  "senha": "Senha@123",
+  "papel": "VISITANTE"
+}
+
+###
+
+### Pedro (COORDENADOR) - sem tag
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Pedro",
+  "email": "pedro@syngate.com",
+  "senha": "Senha@123",
+  "papel": "COORDENADOR"
+}
+
+###
+
+### Manoel (COORDENADOR) - sem tag
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Manoel",
+  "email": "manoel@syngate.com",
+  "senha": "Senha@123",
+  "papel": "COORDENADOR"
+}
+
+###
+
+### Augusta (PROFESSOR) - sem tag
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Augusta",
+  "email": "augusta@syngate.com",
+  "senha": "Senha@123",
+  "papel": "PROFESSOR"
+}
+
+###
+
+### Dayane (ALUNO) - sem tag
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "nome": "Dayane",
+  "email": "dayane@syngate.com",
+  "senha": "Senha@123",
+  "papel": "ALUNO"
+}
+
+###
+
+### Vincular Cartão - Camila (Chaveiro)
+PATCH {{baseUrl}}/api/v1/users/4c42a73b-1640-47f1-9e4d-b1a209320265/cartao
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "cartaoId": "25:B2:95:02"
+}
+
+###
+
+### Vincular Cartão - Fernando (Tag Redonda)
+PATCH {{baseUrl}}/api/v1/users/30d72a1e-a566-4e56-a835-ca8556673c8d/cartao
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "cartaoId": "1D:24:88:D4:09:10:80"
+}
+
+###
+
+### Vincular Cartão - Muriel (Tag Quadrada)
+PATCH {{baseUrl}}/api/v1/users/16ddb786-1774-476e-8986-78cd73474963/cartao
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "cartaoId": "1D:2D:88:D4:09:10:80"
+}
+
+###
+
+### Vincular Cartão - Lucas (Cartão)
+PATCH {{baseUrl}}/api/v1/users/c8921941-6cec-473e-8753-e46a303f8e62/cartao
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "cartaoId": "81:AE:FF:03"
+}
+
+###
+
+### Testar Acesso - Camila (simula leitura da placa)
+POST {{baseUrl}}/api/v1/access
+Content-Type: application/json
+x-device-mac: 80:F3:DA:A9:A3:6C
+x-device-key: c25da19ddf56e9222f61038388d461398b61179fe237d3eba6e7ebe55a31bde2
+
+{
+  "uidCartao": "25:B2:95:02",
+  "direcao": "ENTRADA",
+  "finalidade": "ENTRADA_PREDIO"
+}
