@@ -1,9 +1,9 @@
 node_modules/
 .env
 dist/
-repomix-output.txt
 output/
-
+requests.http
+repomix-output.xml
 .agents/skills/**/refs/
 .claude/
 *.output

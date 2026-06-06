@@ -788,6 +788,30 @@ export const openapiSpecification = {
           '403': { description: 'Papel insuficiente.' },
         },
       },
+    },'/api/v1/reports/stats': {
+  get: {
+    summary: 'Estatísticas do Dashboard',
+    tags: ['Relatórios e Métricas'],
+    security: [{ bearerAuth: [] }],
+    responses: {
+      '200': {
+        description: 'Métricas consolidadas.',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                totalAcessos: { type: 'integer' },
+                concedidos: { type: 'integer' },
+                negados: { type: 'integer' },
+                dispositivosAtivos: { type: 'integer' },
+              },
+            },
+          },
+        },
+      },
     },
   },
+},
+},
 };
