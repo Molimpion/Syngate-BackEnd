@@ -127,6 +127,27 @@ export class AuthService {
     return this.generateTokens(tokenSalvo.usuarioId, tokenSalvo.usuario.papel);
   }
 
+  async trocarSenha(usuarioId: string, senhaAtual: string, novaSenha: string): Promise<void> {
+    const usuario = await prisma.usuario.findUnique({ where: { id: usuarioId } });
+
+    if (!usuario) {
+      throw new Error('401:Credenciais inválidas.');
+    }
+
+    const senhaValida = await comparePassword(senhaAtual, usuario.hashSenha);
+    if (!senhaValida) {
+      // Erro genérico — não revela se a senha atual estava errada especificamente
+      throw new Error('401:Credenciais inválidas.');
+    }
+
+    const novoHash = await hashPassword(novaSenha);
+
+    await prisma.usuario.update({
+      where: { id: usuarioId },
+      data: { hashSenha: novoHash },
+    });
+  }
+
   private async generateTokens(usuarioId: string, papel: PapelUsuario): Promise<TokenResponse> {
     const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET!, {
       expiresIn: ACCESS_TOKEN_EXPIRES_IN,

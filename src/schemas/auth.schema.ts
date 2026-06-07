@@ -22,3 +22,14 @@ export const refreshTokenSchema = z.object({
     refreshToken: z.string().min(1, 'Refresh token é obrigatório.'),
   }),
 });
+
+export const trocarSenhaSchema = z.object({
+  body: z.object({
+    senhaAtual: z.string().min(1, 'Informe a senha atual.'),
+    novaSenha: z
+      .string()
+      .min(8, 'A nova senha deve ter no mínimo 8 caracteres.')
+      .regex(/[A-Z]/, 'A nova senha deve conter ao menos 1 letra maiúscula.')
+      .regex(/[0-9]/, 'A nova senha deve conter ao menos 1 número.'),
+  }),
+});

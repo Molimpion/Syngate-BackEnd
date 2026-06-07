@@ -60,4 +60,19 @@ export class AuthController {
     }
     return res.status(204).send();
   };
+
+  trocarSenha = async (req: Request, res: Response) => {
+    const usuarioId = req.user!.sub;
+    const { senhaAtual, novaSenha } = req.body;
+
+    try {
+      await this.authService.trocarSenha(usuarioId, senhaAtual, novaSenha);
+      return res.status(200).json({ status: 'success', message: 'Senha alterada com sucesso.' });
+    } catch (error: any) {
+      if (error.message.startsWith('401:')) {
+        return res.status(401).json({ status: 'error', message: 'Credenciais inválidas.' });
+      }
+      throw error;
+    }
+  };
 }
