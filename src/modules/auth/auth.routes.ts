@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { RedisStore } from 'rate-limit-redis';
 import { redis } from '../../lib/redis';
 import { validate } from '../../shared/middlewares/validate.middlewares';
-import { loginSchema, cadastroSchema, refreshTokenSchema } from '../../schemas/auth.schema';
+import { loginSchema, cadastroSchema, refreshTokenSchema, trocarSenhaSchema } from '../../schemas/auth.schema';
 import { AuthController } from './auth.controller';
 import { authMiddleware } from '../../shared/middlewares/auth.middleware';
 
@@ -30,5 +30,6 @@ router.post('/cadastro',       authRateLimiter, validate(cadastroSchema),     au
 router.get( '/verificar-email',                                                authController.verificarEmail);
 router.post('/refresh',                         validate(refreshTokenSchema), authController.refresh);
 router.post('/logout',         authMiddleware,                                 authController.logout);
+router.post('/trocar-senha',   authMiddleware,  validate(trocarSenhaSchema),  authController.trocarSenha);
 
 export { router as authRouter };
