@@ -2,9 +2,9 @@ node_modules/
 .env
 dist/
 output/
-requests.http/
-repomix-output.xml/
+requests.http
+repomix-output.xml
 .agents/skills/**/refs/
 .claude/
-*.output/
-covarege
+*.output
+coverage
