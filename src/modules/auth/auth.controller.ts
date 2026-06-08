@@ -5,10 +5,9 @@ export class AuthController {
   private authService = new AuthService();
 
   login = async (req: Request, res: Response) => {
-    const { email, senha } = req.body;
-
+    const { email, senhaLimpa } = req.body;
     try {
-      const tokens = await this.authService.login({ email, senhaLimpa: senha });
+      const tokens = await this.authService.login({ email, senhaLimpa });
       return res.status(200).json({ status: 'success', data: tokens });
     } catch (error: any) {
       if (error.message === 'E-mail não verificado.') {
@@ -29,11 +28,9 @@ export class AuthController {
 
   verificarEmail = async (req: Request, res: Response) => {
     const { token } = req.query;
-
     if (!token || typeof token !== 'string') {
       return res.status(400).json({ status: 'error', message: 'Token de verificação ausente ou inválido.' });
     }
-
     try {
       const resultado = await this.authService.verificarEmail(token);
       return res.status(200).json({ status: 'success', data: resultado });
@@ -64,7 +61,6 @@ export class AuthController {
   trocarSenha = async (req: Request, res: Response) => {
     const usuarioId = req.user!.sub;
     const { senhaAtual, novaSenha } = req.body;
-
     try {
       await this.authService.trocarSenha(usuarioId, senhaAtual, novaSenha);
       return res.status(200).json({ status: 'success', message: 'Senha alterada com sucesso.' });
