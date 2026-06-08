@@ -4,7 +4,7 @@ import { PapelUsuario } from '@prisma/client';
 export const loginSchema = z.object({
   body: z.object({
     email: z.string().email('Formato de e-mail inválido.'),
-    senha: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
+    senhaLimpa: z.string().min(6, 'A senha deve conter no mínimo 6 caracteres.'),
   }),
 });
 
