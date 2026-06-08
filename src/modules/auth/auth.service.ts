@@ -15,12 +15,13 @@ const ACCESS_TOKEN_EXPIRES_IN = '15m';
 const REFRESH_TOKEN_EXPIRES_DAYS = 7;
 
 export class AuthService {
- async login(payload: LoginPayload): Promise<TokenResponse> {
+  async login(payload: LoginPayload): Promise<TokenResponse> {
     console.log('LOGIN CHAMADO:', payload.email);
     const usuario = await prisma.usuario.findUnique({
       where: { email: payload.email },
     });
     console.log('USUARIO ENCONTRADO:', usuario?.email, 'ativo:', usuario?.ativo, 'verificado:', usuario?.emailVerificado);
+
     if (!usuario || !usuario.ativo) {
       throw new Error('Credenciais inválidas.');
     }
@@ -29,10 +30,11 @@ export class AuthService {
       throw new Error('E-mail não verificado.');
     }
 
+    console.log('HASH DO BANCO:', JSON.stringify(usuario.hashSenha));
+    console.log('SENHA RECEBIDA:', JSON.stringify(payload.senhaLimpa));
     const senhaValida = await comparePassword(payload.senhaLimpa, usuario.hashSenha);
-    console.log('senha recebida:', payload.senhaLimpa);
-    console.log('hash no banco:', usuario.hashSenha);
     console.log('bate?', senhaValida);
+
     if (!senhaValida) {
       throw new Error('Credenciais inválidas.');
     }
