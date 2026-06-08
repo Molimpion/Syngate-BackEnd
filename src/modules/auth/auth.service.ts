@@ -6,7 +6,6 @@ import { comparePassword, hashPassword } from '../../shared/utils/hash';
 import { LoginPayload, CadastroPayload, TokenResponse } from '../../shared/types/auth.types';
 import { PapelUsuario, TipoToken } from '@prisma/client';
 
-// Sem fallback — a aplicação não sobe sem JWT_SECRET definido
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   throw new Error('FATAL: JWT_SECRET não definido. Configure a variável de ambiente antes de iniciar.');
@@ -74,7 +73,6 @@ export class AuthService {
       },
     });
 
-    // TODO: disparar e-mail com link contendo o tokenVerificacao
     if (process.env.NODE_ENV === 'development') {
       console.log(`[DEV] Token de verificação para ${dados.email}: ${tokenVerificacao}`);
     }
@@ -136,7 +134,6 @@ export class AuthService {
 
     const senhaValida = await comparePassword(senhaAtual, usuario.hashSenha);
     if (!senhaValida) {
-      // Erro genérico — não revela se a senha atual estava errada especificamente
       throw new Error('401:Credenciais inválidas.');
     }
 
@@ -149,9 +146,16 @@ export class AuthService {
   }
 
   private async generateTokens(usuarioId: string, papel: PapelUsuario): Promise<TokenResponse> {
-    const accessToken = jwt.sign({ sub: usuarioId, papel }, JWT_SECRET!, {
-      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+    const usuario = await prisma.usuario.findUnique({
+      where: { id: usuarioId },
+      select: { nome: true },
     });
+
+    const accessToken = jwt.sign(
+      { sub: usuarioId, papel, nome: usuario?.nome ?? '' },
+      JWT_SECRET!,
+      { expiresIn: ACCESS_TOKEN_EXPIRES_IN },
+    );
 
     const refreshTokenString = randomBytes(40).toString('hex');
     const refreshTokenHash = createHash('sha256').update(refreshTokenString).digest('hex');
