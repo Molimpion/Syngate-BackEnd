@@ -21,7 +21,7 @@
 
 ---
 
-## 1. Visão Geral
+## Visão Geral
 
 Este repositório contém o código-fonte do backend da aplicação **Syngate**, uma **API RESTful** modular projetada para gerenciar controle de acesso físico em ambientes institucionais com integração a hardware IoT (ESP32 + RFID/NFC).
 
@@ -33,7 +33,19 @@ O sistema autentica usuários via cartão RFID, valida turno horário e perfil d
 
 ---
 
-## 2. Arquitetura e Decisões de Design
+## Ecossistema Syngate
+
+A aplicação está dividida em três componentes modulares e integrados. Navegue pelos repositórios para explorar cada camada do sistema:
+
+| Componente | Repositório | Escopo Técnico |
+|------------|-------------|----------------|
+| **API Backend** | [syngate-backend](https://github.com/Molimpion/syngate-backend) | API RESTful, regras de negócio (RBAC), WebSockets e persistência. |
+| **Frontend Web** | [syngate-frontend](https://github.com/Molimpion/syngate-frontend) | Interface administrativa, gráficos de consumo e monitoramento em tempo real. |
+| **Hardware IoT** | [syngate-iot](https://github.com/Molimpion/syngate-iot) | Firmware em C++ para ESP32, sensor ultrassônico e leitura segura de RFID. |
+
+---
+
+## Arquitetura e Decisões de Design
 
 A aplicação segue uma arquitetura baseada em **Módulos**, separando domínios lógicos para maximizar a manutenibilidade, com separação clara entre `schemas`, `middlewares`, `services` e `controllers`.
 
@@ -75,7 +87,7 @@ src/
 
 ---
 
-## 3. Infraestrutura de Produção
+## Infraestrutura de Produção
 
 | Serviço | Provedor | Observação |
 | --- | --- | --- |
@@ -85,7 +97,7 @@ src/
 
 ---
 
-## 4. Como Executar Localmente
+## Como Executar Localmente
 
 ### Pré-requisitos
 
@@ -145,7 +157,7 @@ npx prisma db seed
 
 ---
 
-## 6. Variáveis de Ambiente
+## Variáveis de Ambiente
 
 | Variável | Descrição | Obrigatória |
 | --- | --- | --- |
@@ -158,7 +170,7 @@ npx prisma db seed
 
 ---
 
-## 7. Autenticação
+## Autenticação
 
 ### Usuários (Painel Web)
 
@@ -182,7 +194,7 @@ A chave raw é exibida **uma única vez** no momento do provisionamento — deve
 
 ---
 
-## 8. Endpoints
+## Endpoints
 
 ### Sistema
 
@@ -258,7 +270,7 @@ A chave raw é exibida **uma única vez** no momento do provisionamento — deve
 
 ---
 
-## 9. Eventos Socket.IO
+## Eventos Socket.IO
 
 | Evento | Acionado por | Finalidade |
 | --- | --- | --- |
@@ -268,7 +280,7 @@ A chave raw é exibida **uma única vez** no momento do provisionamento — deve
 
 ---
 
-## 10. Testes
+## Testes
 
 ```bash
 # Rodar todos os testes
@@ -283,7 +295,7 @@ Cobertura atual: testes unitários (`shift-validator`) e testes de segurança (`
 
 ---
 
-## 11. Integração com Hardware (ESP32)
+## Integração com Hardware (ESP32)
 
 O firmware da placa lê o UID do cartão RFID via sensor MFRC522, detecta presença via ultrassônico HC-SR04 e chama `POST /api/v1/access` com autenticação por headers de hardware.
 
@@ -293,7 +305,7 @@ O dispositivo deve ser provisionado via API antes de operar — o endpoint `POST
 
 ---
 
-## 12. Guias de Contribuição e Qualidade (DX)
+## Guias de Contribuição e Qualidade (DX)
 
 ### Padronização de Commits
 
@@ -341,6 +353,6 @@ npx tsx reset-senha.ts
 
 ---
 
-## 13. Licença
+## Licença
 
 Este projeto está sob a Licença MIT. Veja o arquivo `LICENSE` para mais detalhes.
