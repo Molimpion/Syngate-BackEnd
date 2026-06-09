@@ -1,9 +1,3 @@
-Aqui está o `README.md` completo e atualizado, integrando todas as correções de arquitetura, alinhamento de rotas e a nova seção de Developer Experience (DX) com o detalhamento dos agentes de IA.
-
-Você pode copiar o conteúdo abaixo e substituir integralmente no seu arquivo:
-
----
-
 # Syngate — Backend
 
 **Repositório do Backend da Aplicação Syngate**
