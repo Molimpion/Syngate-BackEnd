@@ -1,6 +1,6 @@
 # Syngate — Backend
 
-**Repositório do Backend da Aplicação Syngate**
+**Repositório do Backend da Aplicação Syngate:**
 *Sistema de Controle de Acesso Físico com Integração IoT*
 
 ---
