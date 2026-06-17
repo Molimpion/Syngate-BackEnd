@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+.git
+.gitignore
+*.md
+coverage
+tests
+.agents
+repomix-output.xml
+docker-compose*.yml

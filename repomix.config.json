@@ -1,0 +1,26 @@
+{
+  "output": {
+    "filePath": "repomix-output.xml",
+    "style": "xml",
+    "removeEmptyLines": true,
+    "showLineNumbers": true,
+    "instructionFilePath": "CONTEXT.md"
+  },
+  "ignore": {
+    "useGitignore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "repomix-output.*",
+      "*.lock",
+      "package-lock.json",
+      "*.log",
+      "dist/",
+      "build/",
+      ".next/",
+      "coverage/"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}
